@@ -2,19 +2,21 @@ from argparse import ArgumentParser
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from datamodule import SamRoadDataModule
 
 from utils import load_config
-from dataset import SatMapDataset, graph_collate_fn
 from model import SAMRoad
 
 import wandb
 
-import lightning.pytorch as pl
-from lightning.pytorch.callbacks import ModelCheckpoint
-from pytorch_lightning.loggers import WandbLogger
-from lightning.pytorch.callbacks import LearningRateMonitor
-
+# import lightning.pytorch as pl
+# from lightning.pytorch.callbacks import ModelCheckpoint
+# from pytorch_lightning.loggers import WandbLogger
+# from lightning.pytorch.callbacks import LearningRateMonitor
+import pytorch_lightning as pl
+from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks import LearningRateMonitor
+from pytorch_lightning.loggers import TensorBoardLogger
 
 parser = ArgumentParser()
 parser.add_argument(
@@ -27,7 +29,8 @@ parser.add_argument(
     "--checkpoint", default=None, help="checkpoint of the model to test."
 )
 parser.add_argument(
-    "--precision", default=16, help="32 or 16"
+    # "--precision", default=16, help="32 or 16"
+    "--precision", default="16-mixed", help="32 or 16-mixed"
 )
 
 
@@ -42,20 +45,13 @@ if __name__ == "__main__":
     
 
     net = SAMRoad(config)
-
-    val_ds = SatMapDataset(config, is_train=False, dev_run=False)
-
-    val_loader = DataLoader(
-        val_ds,
-        batch_size=config.BATCH_SIZE,
-        shuffle=False,
-        num_workers=config.DATA_WORKER_NUM,
-        pin_memory=True,
-        collate_fn=graph_collate_fn,
-    )
+    dm = SamRoadDataModule(config, dev_run=False)
 
     checkpoint_callback = ModelCheckpoint(every_n_epochs=1, save_top_k=-1)
     lr_monitor = LearningRateMonitor(logging_interval='step')
+
+    tb_logger = TensorBoardLogger("lightning_logs", name="wild_data_test")
+
 
     trainer = pl.Trainer(
         max_epochs=config.TRAIN_EPOCHS,
@@ -64,7 +60,10 @@ if __name__ == "__main__":
         callbacks=[checkpoint_callback, lr_monitor],
         # strategy='ddp_find_unused_parameters_true',
         precision=args.precision,
+        accelerator="gpu",          # 指定使用 GPU
+        devices=[0],
+        logger=tb_logger,
         # profiler=profiler
         )
 
-    trainer.test(net, dataloaders=val_loader, ckpt_path=args.checkpoint)
+    trainer.test(net, datamodule=dm, ckpt_path=args.checkpoint)

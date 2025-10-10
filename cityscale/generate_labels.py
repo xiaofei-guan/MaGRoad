@@ -5,13 +5,13 @@ import shutil
 import pickle
 import networkx as nx
 import cv2
-
+import ast
 
 IMAGE_SIZE = 2048
 KEYPOINT_RADIUS = 3
 ROAD_WIDTH = 3
 # output_dir = './processed'
-output_dir = './test'
+output_dir = '/data20t/guanwenfei/dataset/Globalscale_mask/train'
 
 def create_directory(dir,delete=False):
     if os.path.isdir(dir) and delete:
@@ -71,14 +71,30 @@ def draw_line_segments_on_image(size, line_segments, width):
 
     return image
 
+def load_road_network(json_path):
+    """Load road network from JSON file and parse string coordinates to tuples."""
+    with open(json_path, 'r') as f:
+        road_network = json.load(f)
+
+    # Convert string coordinates to actual tuples
+    parsed_network = {}
+    for node, neighbors in road_network.items():
+        # Convert string tuple to actual tuple
+        node_tuple = ast.literal_eval(node)
+        neighbor_tuples = [ast.literal_eval(n) for n in neighbors]
+        parsed_network[node_tuple] = neighbor_tuples
+
+    return parsed_network
+
 
 create_directory(output_dir,delete=True)
 
 # data_path = f"./data/20cities/region_{tile_index}_refine_gt_graph.p"
 
-for tile_index in range(180):
-# for tile_index in range(1):
-    print(f'Processing cityscale tile {tile_index}.')
+# for tile_index in range(180):
+for tile_index in range(3338): # globalscale
+    # print(f'Processing cityscale tile {tile_index}.')
+    print(f'Processing globalscale tile {tile_index}.')
     vertices = []
     edges = []
     vertex_flag = True
@@ -88,11 +104,17 @@ for tile_index in range(180):
     # Load GT Graph
     # gt_graph = pickle.load(open(f"./20cities/region_{tile_index}_refine_gt_graph.p",'rb'))
     # gt_graph = pickle.load(open(r"C:\CodeFiles\PythonProjects\ResearchWork\sam_road-main\cityscale\20cities\region_0_refine_gt_graph.p",'rb'))
-    gt_graph = pickle.load(open(f"./20cities/region_{tile_index}_refine_gt_graph.p",'rb'))
+    # gt_graph = pickle.load(open(f"./20cities/region_{tile_index}_refine_gt_graph.p",'rb'))
+    # gt_graph = load_road_network("./mydata/2023contest/road_network_processed/adjacency.json")
+    gt_graph = pickle.load(open(f"/data20t/guanwenfei/dataset/Globalscale_mask/train/region_{tile_index}_refine_gt_graph.p",'rb'))
+
     graph = nx.Graph()  # undirected
     for n, neis in gt_graph.items():
         for nei in neis:
+            # in pickle file, the coordinates are (y, x)
             graph.add_edge((int(n[1]), int(n[0])), (int(nei[1]), int(nei[0])))
+            # in json file, the coordinates are (x, y)
+            # graph.add_edge((int(n[0]), int(n[1])), (int(nei[0]), int(nei[1])))
 
     # print(gt_graph)
     # print(graph)
@@ -113,12 +135,12 @@ for tile_index in range(180):
 
     print(len(key_nodes))
 
-    # # Create key point mask
-    # keypoint_mask = draw_points_on_image(size=IMAGE_SIZE, points=key_nodes, radius=KEYPOINT_RADIUS)
-    #
-    # # Create road mask
-    # road_mask = draw_line_segments_on_image(
-    #     size=IMAGE_SIZE, line_segments=graph.edges(), width=ROAD_WIDTH)
-    #
-    # cv2.imwrite(os.path.join(output_dir, f'keypoint_mask_{tile_index}.png'), keypoint_mask)
-    # cv2.imwri te(os.path.join(output_dir, f'road_mask_{tile_index}.png'), road_mask)
+    # Create key point mask
+    keypoint_mask = draw_points_on_image(size=IMAGE_SIZE, points=key_nodes, radius=KEYPOINT_RADIUS)
+
+    # Create road mask
+    road_mask = draw_line_segments_on_image(
+        size=IMAGE_SIZE, line_segments=graph.edges(), width=ROAD_WIDTH)
+
+    cv2.imwrite(os.path.join(output_dir, f'keypoint_mask_{tile_index}.png'), keypoint_mask)
+    cv2.imwrite(os.path.join(output_dir, f'road_mask_{tile_index}.png'), road_mask)

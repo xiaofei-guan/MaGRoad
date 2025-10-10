@@ -6,11 +6,43 @@ import math
 import graph_utils
 import rtree
 import scipy
+import igraph as ig
 import pickle
 import os
 import addict
 import json
 
+
+class NumpySortedBoxIndex:
+    """Axis-aligned bounding-box index using NumPy searchsorted over x.
+
+    Provides intersection((xmin, ymin, xmax, ymax)) -> List[int] API
+    compatible with the subset used from rtree.
+    """
+
+    def __init__(self, points: np.ndarray, order: np.ndarray = None, sorted_x: np.ndarray = None):
+        points = np.asarray(points)
+        assert points.ndim == 2 and points.shape[1] == 2, "points must be [N,2]"
+        self.points = points.astype(np.float32, copy=False)
+        if order is None:
+            order = np.argsort(self.points[:, 0], kind='mergesort')
+            sorted_x = self.points[order, 0]
+        self.order = np.asarray(order, dtype=np.int32, order='C')
+        self.sorted_x = np.asarray(sorted_x, dtype=np.float32, order='C')
+
+    def intersection(self, bbox):
+        xmin, ymin, xmax, ymax = bbox
+        left = np.searchsorted(self.sorted_x, xmin, side='left')
+        right = np.searchsorted(self.sorted_x, xmax, side='right')
+        if right <= left:
+            return []
+        candidate_idx = self.order[left:right]
+        pts = self.points[candidate_idx]
+        mask = (
+            (pts[:, 0] >= xmin) & (pts[:, 0] <= xmax) &
+            (pts[:, 1] >= ymin) & (pts[:, 1] <= ymax)
+        )
+        return candidate_idx[mask].tolist()
 
 def read_rgb_img(path):
     bgr = cv2.imread(path)
@@ -37,6 +69,29 @@ def cityscale_data_partition():
         if x % 20 == 8:
             indrange_test.append(x)
     return indrange_train, indrange_validation, indrange_test
+
+
+def globalscale_data_partition():
+    # dataset partition
+    indrange_train = []
+    indrange_test = []
+    indrange_test_out_domain = []
+    indrange_validation = []
+    #0-2374 train
+    #2375-2713 val
+    #2714-3337 indomain
+    for x in range(2375):
+        indrange_train.append(x)
+    
+    for x in range(2375,2714):
+        indrange_validation.append(x)
+
+    for x in range(2714,3338):
+        indrange_test.append(x)
+    
+    for x in range(130):
+        indrange_test_out_domain.append(x)
+    return indrange_train, indrange_validation, indrange_test,indrange_test_out_domain
 
 
 def spacenet_data_partition():
@@ -78,17 +133,20 @@ class GraphLabelGenerator():
         self.crossover_points = graph_utils.find_crossover_points(self.full_graph_origin) # [(x, y), (),]
         # subdivide version
         # TODO: check proper resolution
-        self.subdivide_resolution = 4
+        # self.subdivide_resolution = 4
+        self.subdivide_resolution = config.SUBDIVIDE_RESOLUTION
         self.full_graph_subdivide = graph_utils.subdivide_graph(self.full_graph_origin, self.subdivide_resolution) # 此函数将每条边细分成多段，通过插值生成新点，并更新图的结构
         # np array, maybe faster
         self.subdivide_points = np.array(self.full_graph_subdivide.vs['point'])
         # pre-build spatial index
-        # rtree for box queries
-        self.graph_rtee = rtree.index.Index()
-        for i, v in enumerate(self.subdivide_points):
-            x, y = v
-            # hack to insert single points
-            self.graph_rtee.insert(i, (x, y, x, y))
+        # # rtree for box queries
+        # self.graph_rtee = rtree.index.Index()
+        # for i, v in enumerate(self.subdivide_points):
+        #     x, y = v
+        #     # hack to insert single points
+        #     self.graph_rtee.insert(i, (x, y, x, y))
+        # numpy-based AABB index (drop-in replacement)
+        self.graph_rtee = NumpySortedBoxIndex(self.subdivide_points)
         # kdtree for spherical query
         self.graph_kdtree = scipy.spatial.KDTree(self.subdivide_points)
 
@@ -112,7 +170,8 @@ class GraphLabelGenerator():
         # Points near crossover and intersections are interesting.
         # they will be more frequently sampled
         interesting_indices = set()
-        interesting_radius = 32
+        # interesting_radius = 32
+        interesting_radius = config.INTERESTING_RADIUS
         # near itsc
         for i in itsc_indices:
             p = self.subdivide_points[i]
@@ -122,7 +181,8 @@ class GraphLabelGenerator():
             nearby_indices = self.graph_kdtree.query_ball_point(np.array(p), interesting_radius)
             interesting_indices.update(nearby_indices)
         self.sample_weights = np.full((point_num,), 0.1, dtype=np.float32)
-        self.sample_weights[list(interesting_indices)] = 0.9
+        # self.sample_weights[list(interesting_indices)] = 0.9 # itsc and neighbor 也是 interesting points
+        self.sample_weights[list(interesting_indices)] = config.INTR_SAMPLE_WEIGHT  # itsc and neighbor 也是 interesting points
 
     def sample_patch(self, patch, rot_index=0):
         (x0, y0), (x1, y1) = patch
@@ -225,17 +285,48 @@ class GraphLabelGenerator():
         nmsed_points = nmsed_points[:, :2]
 
         # Add noise
-        noise_scale = 1.0  # pixels
+        noise_scale = self.config.NOISE_SCALE  # pixels
         nmsed_points += np.random.normal(0.0, noise_scale, size=nmsed_points.shape)
 
         return nmsed_points, samples
+
+
+    @classmethod
+    def from_precomputed_dir(cls, tile_dir: str, config):
+        """Load precomputed GLG without reconstruction (fast path)."""
+        state_path = os.path.join(tile_dir, 'glg_state.pkl')
+        with open(state_path, 'rb') as f:
+            state = pickle.load(f)
+
+        obj = cls.__new__(cls)
+        obj.config = config
+
+        obj.subdivide_points = state['subdivide_points']
+        obj.exclude_indices = state['exclude_indices']  # already a set
+        obj.nms_score_override = state['nms_score_override']
+        obj.sample_weights = state['sample_weights']
+        obj.subdivide_resolution = int(state['subdivide_resolution'])
+        obj.full_graph_subdivide = state['full_graph_subdivide']  # igraph.Graph
+        obj.full_graph_origin = None
+
+        # Open disk-backed Rtree
+        # rtree_base = state['rtree_path']
+        # obj.graph_rtee = rtree.index.Index(rtree_base)
+        # Build numpy AABB index directly
+        order = state['numpy_index_order']
+        sorted_x = state['numpy_index_sorted_x']
+        obj.graph_rtee = NumpySortedBoxIndex(obj.subdivide_points, order=order, sorted_x=sorted_x)
+
+        # No need for global KDTree at runtime
+
+        return obj
 
 
 def test_graph_label_generator():
     if not os.path.exists('debug'):
         os.mkdir('debug')
 
-    dataset = 'spacenet'
+    dataset = 'map_patches' # 'cityscale', 'spacenet', 'map_patches'
     if dataset == 'cityscale':
         rgb_path = './cityscale/20cities/region_166_sat.png'
         # Load GT Graph
@@ -249,21 +340,31 @@ def test_graph_label_generator():
 
         coord_transform = lambda v: np.stack([v[:, 1], 400 - v[:, 0]], axis=1)
         # coord_transform = lambda v : v[:, ::-1]
+    elif dataset == 'map_patches':
+        rgb_path = 'mydata/map_patches/pickle_train/data_0.png'
+        gt_graph = pickle.load(open(f"mydata/map_patches/pickle_train/gt_graph_0.p", 'rb'))
+        coord_transform = lambda v: v[:, ::-1]
     rgb = read_rgb_img(rgb_path)
     config = addict.Dict()
-    config.PATCH_SIZE = 256
-    config.ROAD_NMS_RADIUS = 16
-    config.TOPO_SAMPLE_NUM = 4
-    config.NEIGHBOR_RADIUS = 64
+    config.PATCH_SIZE = 1024 # 256
+    config.ROAD_NMS_RADIUS = 100 # 16
+    config.TOPO_SAMPLE_NUM = 16 # 4
+    config.NEIGHBOR_RADIUS = 300 # 64
     config.MAX_NEIGHBOR_QUERIES = 16
+    config.SUBDIVIDE_RESOLUTION = 4
+    config.INTERESTING_RADIUS = 200 # 100
+    config.INTR_SAMPLE_WEIGHT = 0.9
     gen = GraphLabelGenerator(config, gt_graph, coord_transform)
-    patch = ((x0, y0), (x1, y1)) = ((64, 64), (64 + config.PATCH_SIZE, 64 + config.PATCH_SIZE))
-    test_num = 64
+    # patch = ((x0, y0), (x1, y1)) = ((64, 64), (64 + config.PATCH_SIZE, 64 + config.PATCH_SIZE))
+    patch = ((x0, y0), (x1, y1)) = ((0, 0), (1024, 1024))
+    test_num = 1 # 64
     for i in range(test_num):
         rot_index = np.random.randint(0, 4)
         points, samples = gen.sample_patch(patch, rot_index=rot_index)
         rgb_patch = rgb[y0:y1, x0:x1, ::-1].copy()
         rgb_patch = np.rot90(rgb_patch, rot_index, (0, 1)).copy()
+        for p in points:
+            cv2.circle(rgb_patch, p.astype(np.int32), 4, (255, 0, 0), 4)
         for pairs, shall_connect, valid in samples:
             color = tuple(int(c) for c in np.random.randint(0, 256, size=3))
 
@@ -271,15 +372,15 @@ def test_graph_label_generator():
                 if not is_valid:
                     continue
                 p0, p1 = points[src], points[tgt]
-                cv2.circle(rgb_patch, p0.astype(np.int32), 4, color, -1)
-                cv2.circle(rgb_patch, p1.astype(np.int32), 2, color, -1)
+                cv2.circle(rgb_patch, p0.astype(np.int32), 8, color, 4) 
+                cv2.circle(rgb_patch, p1.astype(np.int32), 4, color, 4)
                 if connected:
                     cv2.line(
                         rgb_patch,
                         (int(p0[0]), int(p0[1])),
                         (int(p1[0]), int(p1[1])),
-                        (255, 255, 255),
-                        1,
+                        (0, 255, 0),
+                        1, # 1
                     )
         cv2.imwrite(f'debug/viz_{i}.png', rgb_patch)
 
@@ -305,76 +406,110 @@ def graph_collate_fn(batch):
 class SatMapDataset(Dataset):
     def __init__(self, config, is_train, dev_run=False):
         self.config = config
-
-        assert self.config.DATASET in {'cityscale', 'spacenet'}
-        if self.config.DATASET == 'cityscale':
-            self.IMAGE_SIZE = 2048
-            # TODO: SAMPLE_MARGIN here is for training, the one in config is for inference
-            self.SAMPLE_MARGIN = 64
-
-            rgb_pattern = './cityscale/20cities/region_{}_sat.png'
-            keypoint_mask_pattern = './cityscale/processed/keypoint_mask_{}.png'
-            road_mask_pattern = './cityscale/processed/road_mask_{}.png'
-            gt_graph_pattern = './cityscale/20cities/region_{}_refine_gt_graph.p'
-
-            train, val, test = cityscale_data_partition()
-
-            # coord-transform = (r, c) -> (x, y)
-            # takes [N, 2] points
-            coord_transform = lambda v: v[:, ::-1]
-
-        elif self.config.DATASET == 'spacenet':
-            self.IMAGE_SIZE = 400
-            self.SAMPLE_MARGIN = 0
-
-            rgb_pattern = './spacenet/RGB_1.0_meter/{}__rgb.png'
-            keypoint_mask_pattern = './spacenet/processed/keypoint_mask_{}.png'
-            road_mask_pattern = './spacenet/processed/road_mask_{}.png'
-            gt_graph_pattern = './spacenet/RGB_1.0_meter/{}__gt_graph.p'
-
-            train, val, test = spacenet_data_partition()
-
-            # coord-transform ??? -> (x, y)
-            # takes [N, 2] points
-            coord_transform = lambda v: np.stack([v[:, 1], 400 - v[:, 0]], axis=1)
-
         self.is_train = is_train
 
-        train_split = train + val
-        test_split = test
+        # Wild_data specific configuration
+        self.IMAGE_SIZE = 1024  # wild_data uses 1024x1024 patches
+        self.SAMPLE_MARGIN = config.SAMPLE_MARGIN
+        
+        base_dir = '/home/guanwenfei/ResearchWork/sam_road-main/wild_data'
+        glg_base_dir = os.path.join(base_dir, 'wild_data_GLG')
+        
+        # Collect tile IDs from each split folder
+        def get_tile_ids_from_folder(folder_path):
+            """Extract tile IDs from data_{id}.png files in folder"""
+            tile_ids = []
+            if not os.path.exists(folder_path):
+                print(f'Warning: folder {folder_path} does not exist')
+                return tile_ids
+            for filename in os.listdir(folder_path):
+                if filename.startswith('data_') and filename.endswith('.png'):
+                    try:
+                        tile_id = filename.replace('data_', '').replace('.png', '')
+                        tile_ids.append(tile_id)
+                    except:
+                        continue
+            return sorted(tile_ids)
+        
+        # Get tile IDs from train, val, test folders
+        # rgb_folder = os.path.join(base_dir, 'train_patches')
+        # val_folder = os.path.join(base_dir, 'val_patches')
+        # test_folder = os.path.join(base_dir, 'test_patches')
+        
+        train_ids = get_tile_ids_from_folder(os.path.join(base_dir, 'train_patches', 'train_AB'))
+        val_ids = get_tile_ids_from_folder(os.path.join(base_dir, 'val_patches', 'val_AB'))
+        test_ids = get_tile_ids_from_folder(os.path.join(base_dir, 'test_patches', 'test_AB'))
+        
+        print(f'Found {len(train_ids)} train tiles, {len(val_ids)} val tiles, {len(test_ids)} test tiles')
+        
+        # For training: use train + val; For testing: use test
+        if self.is_train:
+            tile_info_list = []
+            # Add train tiles
+            for tid in train_ids:
+                tile_info_list.append({
+                    'id': tid,
+                    'rgb_pattern': os.path.join(base_dir, 'train_patches', 'train_AB', 'data_{}.png'),
+                    'keypoint_pattern': os.path.join(base_dir, 'wild_data_mask', 'train_patches', 'train_AB', 'keypoint_mask_{}.png'),
+                    'road_pattern': os.path.join(base_dir, 'wild_data_mask', 'train_patches', 'train_AB', 'road_mask_{}.png'),
+                    'glg_dir': os.path.join(glg_base_dir, 'train_patches', 'all_train_AB_GLG', 'tile_{}')
+                })
+            # Add val tiles
+            for tid in val_ids:
+                tile_info_list.append({
+                    'id': tid,
+                    'rgb_pattern': os.path.join(base_dir, 'val_patches', 'val_AB', 'data_{}.png'),
+                    'keypoint_pattern': os.path.join(base_dir, 'wild_data_mask', 'val_patches', 'val_AB', 'keypoint_mask_{}.png'),
+                    'road_pattern': os.path.join(base_dir, 'wild_data_mask', 'val_patches', 'val_AB', 'road_mask_{}.png'),
+                    'glg_dir': os.path.join(glg_base_dir, 'val_patches', 'all_val_AB_GLG', 'tile_{}')
+                })
+        else:
+            tile_info_list = []
+            # Add test tiles
+            for tid in test_ids:
+                tile_info_list.append({
+                    'id': tid,
+                    'rgb_pattern': os.path.join(base_dir, 'test_patches', 'test_AB', 'data_{}.png'),
+                    'keypoint_pattern': os.path.join(base_dir, 'wild_data_mask', 'test_patches', 'test_AB', 'keypoint_mask_{}.png'),
+                    'road_pattern': os.path.join(base_dir, 'wild_data_mask', 'test_patches', 'test_AB', 'road_mask_{}.png'),
+                    'glg_dir': os.path.join(glg_base_dir, 'test_patches', 'all_test_AB_GLG', 'tile_{}')
+                })
 
-        tile_indices = train_split if self.is_train else test_split
-        self.tile_indices = tile_indices
-
-        # Stores all imgs in memory.
-        self.rgbs, self.keypoint_masks, self.road_masks = [], [], []
-        # For graph label generation.
-        self.graph_label_generators = []
-
-        ##### FAST DEBUG
+        # Optional debug shrink
         if dev_run:
-            tile_indices = tile_indices[:4]
-        ##### FAST DEBUG
+            tile_info_list = tile_info_list[:min(len(tile_info_list), 200)]
 
-        for tile_idx in tile_indices:
-            print(f'loading tile {tile_idx}')
-            rgb_path = rgb_pattern.format(tile_idx)
-            road_mask_path = road_mask_pattern.format(tile_idx)
-            keypoint_mask_path = keypoint_mask_pattern.format(tile_idx)
+        # Paths and GLG objects
+        self.rgb_paths, self.keypoint_mask_paths, self.road_mask_paths = [], [], []
+        self.graph_label_generators = []
+        
+        processed_data = 'train+val' if self.is_train else 'test'
+        print(f'-------------------loading {processed_data} data ({len(tile_info_list)} tiles)------------------')
 
-            # graph label gen
-            # gt graph: dict for adj list, for cityscale set keys are (r, c) nodes, values are list of (r, c) nodes
-            # I don't know what coord system spacenet uses but we convert them all to (x, y)
-            gt_graph_adj = pickle.load(open(gt_graph_pattern.format(tile_idx), 'rb'))
-            if len(gt_graph_adj) == 0:
-                print(f'===== skipped empty tile {tile_idx} =====')
+        for tile_info in tile_info_list:
+            tile_id = tile_info['id']
+            print(f'loading tile {tile_id}')
+
+            rgb_path = tile_info['rgb_pattern'].format(tile_id)
+            keypoint_mask_path = tile_info['keypoint_pattern'].format(tile_id)
+            road_mask_path = tile_info['road_pattern'].format(tile_id)
+            tile_dir = tile_info['glg_dir'].format(tile_id)
+
+            # Strict correspondence check
+            if not (os.path.exists(rgb_path) and os.path.exists(keypoint_mask_path) and os.path.exists(road_mask_path)):
+                print(f'===== skipped tile {tile_id}: missing RGB or masks =====')
+                continue
+            state_path = os.path.join(tile_dir, 'glg_state.pkl')
+            if not os.path.exists(state_path):
+                print(f'===== skipped tile {tile_id}: missing GLG state {state_path} =====')
                 continue
 
-            self.rgbs.append(read_rgb_img(rgb_path))
-            self.road_masks.append(cv2.imread(road_mask_path, cv2.IMREAD_GRAYSCALE))
-            self.keypoint_masks.append(cv2.imread(keypoint_mask_path, cv2.IMREAD_GRAYSCALE))
-            graph_label_generator = GraphLabelGenerator(config, gt_graph_adj, coord_transform)
-            self.graph_label_generators.append(graph_label_generator)
+            self.rgb_paths.append(rgb_path)
+            self.keypoint_mask_paths.append(keypoint_mask_path)
+            self.road_mask_paths.append(road_mask_path)
+
+            glg = GraphLabelGenerator.from_precomputed_dir(tile_dir, self.config)
+            self.graph_label_generators.append(glg)
 
         self.sample_min = self.SAMPLE_MARGIN
         self.sample_max = self.IMAGE_SIZE - (self.config.PATCH_SIZE + self.SAMPLE_MARGIN)
@@ -382,36 +517,44 @@ class SatMapDataset(Dataset):
         if not self.is_train:
             eval_patches_per_edge = math.ceil((self.IMAGE_SIZE - 2 * self.SAMPLE_MARGIN) / self.config.PATCH_SIZE)
             self.eval_patches = []
-            for i in range(len(tile_indices)):
+            for i in range(len(self.rgb_paths)):
                 self.eval_patches += get_patch_info_one_img(
                     i, self.IMAGE_SIZE, self.SAMPLE_MARGIN, self.config.PATCH_SIZE, eval_patches_per_edge
                 )
 
     def __len__(self):
         if self.is_train:
-            # Pixel seen in one epoch ~ 17 x total pixels in training set
-            if self.config.DATASET == 'cityscale':
-                return max(1, int(self.IMAGE_SIZE / self.config.PATCH_SIZE)) ** 2 * 2500
-            elif self.config.DATASET == 'spacenet':
-                return 84667
+            # For wild_data: return number of tiles (each tile is 1024x1024)
+            return len(self.rgb_paths)
         else:
             return len(self.eval_patches)
 
     def __getitem__(self, idx):
         # Sample a patch.
         if self.is_train:
-            img_idx = np.random.randint(low=0, high=len(self.rgbs))
+            img_idx = np.random.randint(low=0, high=len(self.rgb_paths))
             begin_x = np.random.randint(low=self.sample_min, high=self.sample_max + 1)
+            # begin_x = np.random.randint(low=0, high=self.sample_max + 1)
             begin_y = np.random.randint(low=self.sample_min, high=self.sample_max + 1)
             end_x, end_y = begin_x + self.config.PATCH_SIZE, begin_y + self.config.PATCH_SIZE
         else:
             # Returns eval patch
             img_idx, (begin_x, begin_y), (end_x, end_y) = self.eval_patches[idx]
 
-        # Crop patch imgs and masks
-        rgb_patch = self.rgbs[img_idx][begin_y:end_y, begin_x:end_x, :]
-        keypoint_mask_patch = self.keypoint_masks[img_idx][begin_y:end_y, begin_x:end_x]
-        road_mask_patch = self.road_masks[img_idx][begin_y:end_y, begin_x:end_x]
+            # img_idx = np.random.randint(low=0, high=len(self.rgbs))
+            # # begin_x = np.random.randint(low=self.sample_min, high=self.sample_max + 1)
+            # begin_x = np.random.randint(low=0, high=self.sample_max + 1)
+            # begin_y = np.random.randint(low=self.sample_min, high=self.sample_max + 1)
+            # end_x, end_y = begin_x + self.config.PATCH_SIZE, begin_y + self.config.PATCH_SIZE
+
+        # Load full images/masks lazily, then crop patch imgs and masks
+        rgb_full = read_rgb_img(self.rgb_paths[img_idx])
+        keypoint_mask_full = cv2.imread(self.keypoint_mask_paths[img_idx], cv2.IMREAD_GRAYSCALE)
+        road_mask_full = cv2.imread(self.road_mask_paths[img_idx], cv2.IMREAD_GRAYSCALE)
+
+        rgb_patch = rgb_full[begin_y:end_y, begin_x:end_x, :]
+        keypoint_mask_patch = keypoint_mask_full[begin_y:end_y, begin_x:end_x]
+        road_mask_patch = road_mask_full[begin_y:end_y, begin_x:end_x]
 
         # Augmentation
         rot_index = 0

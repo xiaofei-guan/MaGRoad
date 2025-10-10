@@ -13,6 +13,7 @@ import unittest
 import igraph as ig
 import rtree
 import scipy
+from typing import Tuple
 
 
 def inspect_graph(node_array, edge_array):
@@ -604,7 +605,50 @@ def nms_points(points, scores, radius, return_indices=False):
     else:
         return sorted_points[kept]
 
+# def nms_points(points: np.ndarray, scores: np.ndarray, radius: float, return_indices: bool = False) -> Tuple[np.ndarray, np.ndarray]:
+#     """
+#     Efficient NMS implementation using KDTree for faster radius searches.
     
+#     Args:
+#         points: Array of point coordinates (N, 2)
+#         scores: Array of point scores (N,)
+#         radius: Suppression radius
+        
+#     Returns:
+#         selected_points: Points after NMS
+#         selected_scores: Scores of selected points
+#     """
+
+#     # Sort points by score in descending order
+#     order = np.argsort(scores)[::-1]
+#     points = points[order]
+#     scores = scores[order]
+    
+#     # Initialize KDTree for efficient radius search
+#     kdtree = scipy.spatial.KDTree(points)
+    
+#     # Initialize mask for keeping track of suppressed points
+#     keep_mask = np.ones(len(points), dtype=bool)
+    
+#     # Process points in order of decreasing score
+#     for i in range(len(points)):
+#         if keep_mask[i]:
+#             # Find neighbors within radius
+#             neighbors = kdtree.query_ball_point(points[i], radius)
+            
+#             # Suppress neighbors with lower scores
+#             for j in neighbors:
+#                 if j > i:  # Skip already processed points
+#                     keep_mask[j] = False
+    
+#     # Keep only non-suppressed points
+#     selected_points = points[keep_mask]
+#     if return_indices:
+#         selected_indices = order[keep_mask]
+#         return selected_points, selected_indices
+#     else:
+#         return selected_points
+
 def bfs_with_conditions(graph, start_node, stop_nodes, max_depth):
     """
     Perform BFS on an igraph graph (directed or undirected) from a given start node.

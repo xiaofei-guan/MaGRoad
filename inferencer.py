@@ -1,3 +1,4 @@
+import json
 import numpy as np
 import os
 import imageio
@@ -8,7 +9,7 @@ import re
 
 from utils import load_config, create_output_dir_and_save_config
 from dataset import cityscale_data_partition, read_rgb_img, get_patch_info_one_img
-from dataset import spacenet_data_partition
+from dataset import spacenet_data_partition, globalscale_data_partition
 from model import SAMRoad
 import graph_extraction
 import graph_utils
@@ -21,6 +22,7 @@ from collections import defaultdict
 import time
 
 from argparse import ArgumentParser
+from datetime import datetime
 
 
 parser = ArgumentParser()
@@ -77,20 +79,106 @@ def get_indices_from_image_folder(folder_path):
     return nums
 
 
+def visualize_rectangular_image_and_graph(img, nodes, edges):
+    """Visualize graph on rectangular image without distortion.
+    
+    Args:
+        img: RGB image (H, W, 3)
+        nodes: Node coordinates in (r, c) format, absolute pixel coordinates
+        edges: Edge list, each edge is (src_idx, tgt_idx)
+    
+    Returns:
+        BGR image with graph overlay
+    """
+    img_height, img_width = img.shape[0:2]
+    viz_img = np.copy(img)
+    viz_img = cv2.cvtColor(viz_img, cv2.COLOR_RGB2BGR)
+    
+    # nodes is in (r, c) format, need to convert to (x, y) for cv2
+    # (r, c) -> (y, x) -> (x, y)
+    nodes_xy = nodes[:, ::-1]  # now (c, r) = (x, y)
+    
+    # Draw edges
+    for edge in edges:
+        start_node = nodes_xy[edge[0]]
+        end_node = nodes_xy[edge[1]]
+        cv2.line(
+            viz_img,
+            (int(start_node[0]), int(start_node[1])),
+            (int(end_node[0]), int(end_node[1])),
+            (15, 160, 253),  # BGR color
+            4,
+        )
+    
+    # Draw nodes
+    for node in nodes_xy:
+        x, y = node
+        cv2.circle(viz_img, (int(x), int(y)), 4, (0, 255, 255), -1)
+    
+    return viz_img
+
+
+def get_patch_info_rectangular(image_index, height, width, sample_margin, patch_size, patches_per_edge):
+    """Generate patch info for rectangular images.
+    
+    Args:
+        image_index: index of the image
+        height: image height
+        width: image width
+        sample_margin: margin from image edges
+        patch_size: size of each square patch
+        patches_per_edge: number of patches along the shorter edge
+    
+    Returns:
+        list of (image_index, (x_begin, y_begin), (x_end, y_end))
+    """
+    patch_info = []
+    
+    # Determine patches for height dimension
+    sample_min_y = sample_margin
+    sample_max_y = height - (patch_size + sample_margin)
+    if sample_max_y <= sample_min_y:
+        # Image too small in height, use center patch
+        eval_samples_y = [(height - patch_size) // 2]
+    else:
+        # Calculate number of patches needed for height
+        # Scale patches_per_edge proportionally based on height
+        patches_y = max(1, int(patches_per_edge * height / min(height, width)))
+        eval_samples_y = np.linspace(start=sample_min_y, stop=sample_max_y, num=patches_y)
+        eval_samples_y = [round(y) for y in eval_samples_y]
+    
+    # Determine patches for width dimension
+    sample_min_x = sample_margin
+    sample_max_x = width - (patch_size + sample_margin)
+    if sample_max_x <= sample_min_x:
+        # Image too small in width, use center patch
+        eval_samples_x = [(width - patch_size) // 2]
+    else:
+        # Calculate number of patches needed for width
+        patches_x = max(1, int(patches_per_edge * width / min(height, width)))
+        eval_samples_x = np.linspace(start=sample_min_x, stop=sample_max_x, num=patches_x)
+        eval_samples_x = [round(x) for x in eval_samples_x]
+    
+    # Generate all patch combinations
+    for x in eval_samples_x:
+        for y in eval_samples_y:
+            patch_info.append(
+                (image_index, (x, y), (x + patch_size, y + patch_size))
+            )
+    
+    return patch_info
+
+
 def infer_one_img(net, img, config):
-    # TODO(congrui): centralize these configs
-
+    # Support arbitrary image dimensions without cropping
+    
     H, W = img.shape[0:2]
-    if H < W:
-        img = img[:, 0:H, :]
-    if W < H:
-        img = img[0:W, :, :]
-
-    image_size = img.shape[0]
+    
     batch_size = config.INFER_BATCH_SIZE
     # list of (i, (x_begin, y_begin), (x_end, y_end))
-    all_patch_info = get_patch_info_one_img(
-        0, image_size, config.SAMPLE_MARGIN, config.PATCH_SIZE, config.INFER_PATCHES_PER_EDGE)
+    # Use rectangular patch generation for non-square images
+    all_patch_info = get_patch_info_rectangular(
+        0, H, W, config.SAMPLE_MARGIN, config.PATCH_SIZE, config.INFER_PATCHES_PER_EDGE)
     patch_num = len(all_patch_info)
     batch_num = (
         patch_num // batch_size
@@ -110,6 +198,7 @@ def infer_one_img(net, img, config):
     # stores img embeddings for toponet
     # list of [B, D, h, w], len=batch_num
     img_features = list()
+    mask_logits_list = list()
 
     for batch_index in range(batch_num):
         offset = batch_index * batch_size
@@ -120,8 +209,9 @@ def infer_one_img(net, img, config):
         with torch.no_grad():
             batch_img_patches = batch_img_patches.to(args.device, non_blocking=False)
             # [B, H, W, 2]
-            mask_scores, patch_img_features = net.infer_masks_and_img_features(batch_img_patches)
+            patch_img_features, mask_logits, mask_scores = net.infer_masks_and_img_features(batch_img_patches)
             img_features.append(patch_img_features)
+            mask_logits_list.append(mask_logits)
         # Aggregate masks
         for patch_index, patch_info in enumerate(batch_patch_info):
             _, (x0, y0), (x1, y1) = patch_info
@@ -225,11 +315,11 @@ def infer_one_img(net, img, config):
         batch_points = torch.tensor(collated['points'], device=args.device)
         batch_pairs = torch.tensor(collated['pairs'], device=args.device)
         batch_valid = torch.tensor(collated['valid'], device=args.device)
-
+        batch_mask_logits = mask_logits_list[batch_index]
 
         with torch.no_grad():
             # [B, N_samples, N_pairs, 1]
-            topo_scores = net.infer_toponet(batch_features, batch_points, batch_pairs, batch_valid)
+            topo_scores = net.infer_toponet(batch_features, batch_points, batch_pairs, batch_valid, batch_mask_logits)
                 
         # all-invalid (padded, no neighbors) queries returns nan scores
         # [B, N_samples, N_pairs]
@@ -270,7 +360,8 @@ if __name__ == "__main__":
     config = load_config(args.config)
     
     # Builds eval model    
-    device = torch.device(args.device) if args.device.startswith("cuda") else torch.device("cpu")
+    device = torch.device("cuda:2") if torch.cuda.is_available() else torch.device("cpu")
+    args.device = device
     # device = torch.device("cuda") if args.device == "cuda" else torch.device("cpu")
     # Good when model architecture/input shape are fixed.
     torch.backends.cudnn.benchmark = True
@@ -292,28 +383,21 @@ if __name__ == "__main__":
         _, _, test_img_indices = spacenet_data_partition()
         rgb_pattern = './spacenet/RGB_1.0_meter/{}__rgb.png'
         gt_graph_pattern = './spacenet/RGB_1.0_meter/{}__gt_graph.p'
-    elif config.DATASET == '2024testdata':
-        # test_img_indices = get_indices_from_image_folder('./mydata/2024testdata')
-        test_img_indices = [0, 7, 169, 385]
-        rgb_pattern = './mydata/2024testdata/data{}.png'
-    elif config.DATASET == '1024patch':
-        test_img_indices = [4, 5]
-        rgb_pattern = './mydata/1024patch/data{}.png'
-    elif config.DATASET == 'resolution1m':
-        test_img_indices = [0, 1, 2, 3, 4, 5]
-        # test_img_indices = [7, 8]
-        rgb_pattern = './mydata/resolution1m/data{}.png'
-    elif config.DATASET == '2023contest':
-        test_img_indices = [0, ]
-        rgb_pattern = './mydata/2023contest/data{}.png'
-    # output_dir_prefix = './save/infer_'
-    # output_dir_prefix = './mydata/2024testdata_infer_'
-    output_dir_prefix = './mydata/2023contest/'
-    # if args.output_dir:
-    #     output_dir = create_output_dir_and_save_config(output_dir_prefix, config, specified_dir=f'./save/{args.output_dir}')
-    # else:
-    #     output_dir = create_output_dir_and_save_config(output_dir_prefix, config)
-    output_dir = output_dir_prefix + 'infer_spacenet_res_2'
+    elif config.DATASET == 'globalscale':
+        _, _, test_img_indices, out_domain_img_indices = globalscale_data_partition()
+        rgb_pattern = './globalscale/train/region_{}_sat.png'
+        gt_graph_pattern = './globalscale/train/region_{}_graph_gt.pickle'
+    elif config.DATASET == 'dataset':
+        with open('./mydata/dataset/dataset_split.json', 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        test_img_indices = data.get("test", [])
+        rgb_pattern = './mydata/dataset/data_{}.png'
+    elif config.DATASET == 'wild_data':
+
+        test_img_indices = list(range(34))
+        rgb_pattern = '/data20t/guanwenfei/dataset/wild_data/test/data{}.jpg'
+
+    output_dir = f'/data20t/guanwenfei/inference/wild_data_infer/magtoponet_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
     total_inference_seconds = 0.0
 
     for img_id in test_img_indices:
@@ -341,7 +425,7 @@ if __name__ == "__main__":
 
         # RGB already
         viz_img = np.copy(img)
-        img_size = viz_img.shape[0]
+        img_height, img_width = viz_img.shape[0:2]
 
         # visualizes fused masks
         mask_save_dir = os.path.join(output_dir, 'mask')
@@ -370,10 +454,12 @@ if __name__ == "__main__":
         # cv2.imwrite(os.path.join(diff_save_dir, f'{img_id}.png'), diff_img)
 
         # Visualizes merged large map
+        # Use custom visualization function that handles rectangular images correctly
         viz_save_dir = os.path.join(output_dir, 'viz')
         if not os.path.exists(viz_save_dir):
             os.makedirs(viz_save_dir)
-        viz_img = triage.visualize_image_and_graph(viz_img, pred_nodes / img_size, pred_edges, viz_img.shape[0])
+        # viz_img = triage.visualize_image_and_graph(viz_img, pred_nodes / img_size, pred_edges, viz_img.shape[0])
+        viz_img = visualize_rectangular_image_and_graph(viz_img, pred_nodes, pred_edges)
         cv2.imwrite(os.path.join(viz_save_dir, f'{img_id}.png'), viz_img)
 
         # Saves the large map

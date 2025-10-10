@@ -1,8 +1,8 @@
 #DATASET: '2024testdata'
 #DATASET: '1024patch'
 #DATASET: 'resolution1m'
-#DATASET: 'cityscale'
-DATASET: '2023contest'
+DATASET: 'cityscale'
+# DATASET: '2023contest'
 
 # IN1k + MAE only
 NO_SAM: False
@@ -10,23 +10,21 @@ NO_SAM: False
 SAM_VERSION: 'vit_b'
 #SAM_CKPT_PATH: 'sam_ckpts/sam_vit_b_01ec64.pth'
 SAM_CKPT_PATH: '/home/guanwenfei/ResearchWork/sam_road-main/sam_ckpts/sam_vit_b_01ec64.pth'
-PATCH_SIZE: 512
-BATCH_SIZE: 32 # 16 -> 32
-DATA_WORKER_NUM: 1
-TRAIN_EPOCHS: 15 # 10 -> 15
+PATCH_SIZE: 1024 # 512
+BATCH_SIZE: 2 # 16 -> 32
+DATA_WORKER_NUM: 1 # 1->4
+TRAIN_EPOCHS: 10 # 10 -> 15
 BASE_LR: 0.001
 FREEZE_ENCODER: False
 ENCODER_LR_FACTOR: 0.1
 ENCODER_LORA: False
 FOCAL_LOSS: False
-USE_SAM_DECODER: False # sam_road未使用
-#USE_SAM_DECODER: "sam_decoder" #
-#USE_SAM_DECODER: "transconv_decoder" #
-#USE_SAM_DECODER: "pixel_shuffle" #
+USE_SAM_DECODER: False
+
 
 # TOPONET
 # sample per patch
-TOPO_SAMPLE_NUM: 512  # 512 -> 128
+TOPO_SAMPLE_NUM: 64  # 512 -> 64
 TOPONET_VERSION: 'normal'
 
 # Inference
@@ -44,8 +42,11 @@ INFER_PATCHES_PER_EDGE: 36 # 一条边上划分为多少个patch 16
 ITSC_THRESHOLD: 0.14 # 0.248
 ROAD_THRESHOLD: 0.25 # 0.364
 TOPO_THRESHOLD: 0.500
-# pixels
-ITSC_NMS_RADIUS: 8
-ROAD_NMS_RADIUS: 16
-NEIGHBOR_RADIUS: 64
-MAX_NEIGHBOR_QUERIES: 16
+# Dataset parameters
+ITSC_NMS_RADIUS: 64
+ROAD_NMS_RADIUS: 64
+NEIGHBOR_RADIUS: 256
+SUBDIVIDE_RESOLUTION: 32 # new parameter
+INTERESTING_RADIUS: 128 # new parameter
+INTR_SAMPLE_WEIGHT: 2.0 # new parameter
+MAX_NEIGHBOR_QUERIES: 8 # 16->8
