@@ -11,6 +11,7 @@ from utils import load_config, create_output_dir_and_save_config
 from dataset import cityscale_data_partition, read_rgb_img, get_patch_info_one_img
 from dataset import spacenet_data_partition, globalscale_data_partition
 from model import SAMRoad
+from sam_road_plus_model import SAMRoadplus
 import graph_extraction
 import graph_utils
 import triage
@@ -360,13 +361,20 @@ if __name__ == "__main__":
     config = load_config(args.config)
     
     # Builds eval model    
-    device = torch.device("cuda:2") if torch.cuda.is_available() else torch.device("cpu")
+    device = torch.device("cuda:3") if torch.cuda.is_available() else torch.device("cpu")
     args.device = device
     # device = torch.device("cuda") if args.device == "cuda" else torch.device("cpu")
     # Good when model architecture/input shape are fixed.
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.enabled = True
-    net = SAMRoad(config)
+
+    model_name = config.MODEL_NAME
+    if model_name == 'SAMRoadplus':
+        net = SAMRoadplus(config)
+    elif model_name == 'SAMRoad':
+        net = SAMRoad(config)
+    else:
+        raise ValueError(f'Invalid model name: {model_name}')
 
     # load checkpoint
     checkpoint = torch.load(args.checkpoint, map_location="cpu")
@@ -384,8 +392,10 @@ if __name__ == "__main__":
         rgb_pattern = './spacenet/RGB_1.0_meter/{}__rgb.png'
         gt_graph_pattern = './spacenet/RGB_1.0_meter/{}__gt_graph.p'
     elif config.DATASET == 'globalscale':
-        _, _, test_img_indices, out_domain_img_indices = globalscale_data_partition()
-        rgb_pattern = './globalscale/train/region_{}_sat.png'
+        # _, _, test_img_indices, _ = globalscale_data_partition() # for in-domain
+        _, _, _, test_img_indices = globalscale_data_partition() # for out-of-domain
+        # rgb_pattern = './globalscale/train/region_{}_sat.png' # for in-domain
+        rgb_pattern = '/data20t/guanwenfei/dataset/Globalscale/out_of_domain/region_{}_sat.png' # for out-of-domain
         gt_graph_pattern = './globalscale/train/region_{}_graph_gt.pickle'
     elif config.DATASET == 'dataset':
         with open('./mydata/dataset/dataset_split.json', 'r', encoding='utf-8') as f:

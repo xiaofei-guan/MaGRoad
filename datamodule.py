@@ -2,6 +2,7 @@ import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 
 from dataset import SatMapDataset, graph_collate_fn
+# from code_backup.dataset_globalscale_backup import SatMapDataset, graph_collate_fn
 import os, cv2
 
 
@@ -38,7 +39,7 @@ class SamRoadDataModule(pl.LightningDataModule):
             shuffle=True,
             num_workers=self.config.DATA_WORKER_NUM,
             persistent_workers=True,
-            pin_memory=False,
+            pin_memory=True,
             prefetch_factor=1,
             worker_init_fn=_limit_lib_threads,
             collate_fn=graph_collate_fn,
@@ -52,8 +53,8 @@ class SamRoadDataModule(pl.LightningDataModule):
             num_workers=self.config.DATA_WORKER_NUM,
             persistent_workers=True,
             prefetch_factor=1,
+            pin_memory=True,
             worker_init_fn=_limit_lib_threads,
-            pin_memory=False,
             collate_fn=graph_collate_fn,
         )
     

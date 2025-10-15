@@ -1,4 +1,5 @@
 DATASET: 'cityscale'
+MODEL_NAME: 'SAMRoad' # SAMRoad, SAMRoadplus
 
 # IN1k + MAE only
 NO_SAM: False
@@ -19,7 +20,7 @@ USE_SAM_DECODER: False
 # TOPONET
 # sample per patch
 TOPO_SAMPLE_NUM: 512
-TOPONET: 'maGTopoNet' # pathAwareTopoNet, transformer, maGTopoNet
+TOPONET: 'transformer' # transformer, maGTopoNet
 TOPONET_VERSION: 'normal' # no_tgt_features, no_offset, no_features, normal
 NUM_INTERPOLATIONS: 32
 USE_POINT_FEATURES: False
@@ -42,9 +43,9 @@ INFER_PATCHES_PER_EDGE: 16
 # ======= topo ======
 # Best threshold 0.499267578125, P=0.9713579416275024 R=0.9679416418075562 F1=0.9696467518806458
 
-ITSC_THRESHOLD: 0.217 # V-11 0.206 0.205 V_10 0.219 V_9 0.214 last ckpt # 0.216 epoch_8
-ROAD_THRESHOLD: 0.404 # V-11 0.376 0.372 V_10 0.371 V_9 0.393 last ckpt # 0.385 epoch_8
-TOPO_THRESHOLD: 0.250 # V-11 0.484 0.411 V_10 0.444 V_9 0.433 last ckpt # 0.447 epoch_8
+ITSC_THRESHOLD: 0.248 # V-11 0.206 0.205 V_10 0.219 V_9 0.214 last ckpt # 0.216 epoch_8
+ROAD_THRESHOLD: 0.364 # V-11 0.376 0.372 V_10 0.371 V_9 0.393 last ckpt # 0.385 epoch_8
+TOPO_THRESHOLD: 0.500 # V-11 0.484 0.411 V_10 0.444 V_9 0.433 last ckpt # 0.447 epoch_8
 # pixels
 ITSC_NMS_RADIUS: 8
 ROAD_NMS_RADIUS: 16

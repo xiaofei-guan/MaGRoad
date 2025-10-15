@@ -1,11 +1,13 @@
 from argparse import ArgumentParser
 import numpy as np
+from pytorch_lightning.core import datamodule
 import torch
 import torch.nn as nn
 from datamodule import SamRoadDataModule
 
 from utils import load_config
 from model import SAMRoad
+from sam_road_plus_model import SAMRoadplus
 
 # import wandb
 
@@ -65,12 +67,20 @@ if __name__ == "__main__":
     torch.set_float32_matmul_precision('high') # 设置混合精度
     pl.seed_everything(seed=3407, workers=True) # 设置随机种子 3407
 
-    net = SAMRoad(config)
+    model_name = config.get("MODEL_NAME", "SAMRoad")
+
+    if model_name == "SAMRoad":
+        net = SAMRoad(config)
+    elif model_name == "SAMRoadplus":
+        net = SAMRoadplus(config)
+    else:
+        raise ValueError(f"Invalid model name: {model_name}")
+
     dm = SamRoadDataModule(config, dev_run=dev_run)
 
     checkpoint_callback = ModelCheckpoint(
-        # dirpath=f"/data20t/guanwenfei/ckpt/Globalscale/V_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
-        dirpath="/data20t/guanwenfei/ckpt/wild_data/version1",
+        dirpath=f"/data20t/guanwenfei/ckpt/wild_data/V_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
+        # dirpath="/data20t/guanwenfei/ckpt/wild_data/V_20251011163400",
         filename="{epoch:02d}-{step:05d}-{val_loss:.4f}",
         every_n_epochs=1,
         save_top_k=-1,
@@ -83,7 +93,7 @@ if __name__ == "__main__":
 
     # Replace wandb logger with TensorBoardLogger
     # wandb_logger = WandbLogger()
-    tb_logger = TensorBoardLogger("lightning_logs", name="wild_data_train", version="version1")
+    tb_logger = TensorBoardLogger("lightning_logs", name="wild_data_train")
 
     # from lightning.pytorch.profilers import AdvancedProfiler
     # profiler = AdvancedProfiler(dirpath='profile', filename='result_fast_matcher')
@@ -103,12 +113,29 @@ if __name__ == "__main__":
         strategy='ddp_find_unused_parameters_true', # 或者 'ddp_find_unused_parameters_true' 如果遇到未使用参数的错误
         # strategy='auto',
         accelerator="gpu",          # 指定使用 GPU
-        devices=[2, 3],
+        devices=[3],
         )
 
 
-    if args.resume:
-        trainer.fit(net, datamodule=dm, ckpt_path="/data20t/guanwenfei/ckpt/Globalscale/version2/epoch=974-step=165751-val_loss=0.1201.ckpt")
+    if args.resume:        
+        if model_name == "SAMRoad":
+            net = SAMRoad.load_from_checkpoint(
+                "/data20t/guanwenfei/ckpt/wild_data/version_1/epoch=17-step=17874-val_loss=0.4003.ckpt",
+                config=config,  # 传入修改后的 config
+                strict=False    # 如果模型结构有变化，设置为 False
+            )
+        elif model_name == "SAMRoadplus":
+            net = SAMRoadplus.load_from_checkpoint(
+                "/data20t/guanwenfei/ckpt/wild_data/V_20251011163400/epoch=07-step=15888-val_loss=0.4165.ckpt",
+                config=config,
+                strict=False
+            )
+        else:
+            raise ValueError(f"Invalid model name: {model_name}")
+            
+        trainer.fit(net, datamodule=dm)
+
+        # trainer.fit(net, datamodule=dm, ckpt_path="/data20t/guanwenfei/ckpt/wild_data/V_20251011163400/epoch=07-step=15888-val_loss=0.4165.ckpt")
     else:
         trainer.fit(net, datamodule=dm)
     # trainer.fit(net, datamodule=dm)

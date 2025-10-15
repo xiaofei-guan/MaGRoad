@@ -726,6 +726,27 @@ class MaGTopoNet(nn.Module):
         return logits, scores
     
 
+class DiceLoss(nn.Module):
+    """Dice Loss for segmentation tasks."""
+    def __init__(self, smooth=0.6):
+        super(DiceLoss, self).__init__()
+        self.smooth = smooth
+        
+    def forward(self, pred, target):
+        """
+        Args:
+            pred: logits tensor of shape [B, H, W, C] or [B, C, H, W]
+            target: ground truth tensor of shape [B, H, W, C] or [B, C, H, W]
+        Returns:
+            Dice loss (scalar)
+        """
+        pred = torch.sigmoid(pred)
+        intersection = (pred * target).sum(dim=(1, 2, 3))
+        union = pred.sum(dim=(1, 2, 3)) + target.sum(dim=(1, 2, 3))
+        dice = (2. * intersection + self.smooth) / (union + self.smooth)
+        return 1 - dice.mean()
+
+
 class _LoRA_qkv(nn.Module):
     """In Sam it is implemented as
     self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
@@ -928,8 +949,19 @@ class SAMRoad(pl.LightningModule):
         if self.config.FOCAL_LOSS: # None
             self.mask_criterion = partial(torchvision.ops.sigmoid_focal_loss, reduction='mean')
         else:
-            # self.mask_criterion = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor([10.0]))
-            self.mask_criterion = torch.nn.BCEWithLogitsLoss()
+            # Support configurable BCE pos_weight
+            pos_weight_val = self.config.get('BCE_POS_WEIGHT', 1.0)
+            if pos_weight_val != 1.0:
+                print(f"Using BCEWithLogitsLoss with pos_weight={pos_weight_val}")
+                self.mask_criterion = torch.nn.BCEWithLogitsLoss(pos_weight=torch.tensor([pos_weight_val]))
+            else:
+                self.mask_criterion = torch.nn.BCEWithLogitsLoss()
+        
+        # Add Dice Loss
+        dice_smooth = self.config.get('DICE_SMOOTH', 0.6)
+        print(f"Using Dice Loss with smooth={dice_smooth}")
+        self.mask_dice_criterion = DiceLoss(smooth=dice_smooth)
+        
         self.topo_criterion = torch.nn.BCEWithLogitsLoss(reduction='none')
 
         #### Metrics
@@ -1105,9 +1137,10 @@ class SAMRoad(pl.LightningModule):
         mask_logits, mask_scores, topo_logits, topo_scores = self(rgb, graph_points, pairs, valid)
 
         gt_masks = torch.stack([keypoint_mask, road_mask], dim=3)
-        # mask_loss = self.mask_criterion(mask_logits, gt_masks)
+        # Compute BCE loss and Dice loss
         bce_loss = self.mask_criterion(mask_logits, gt_masks)
-        mask_loss = bce_loss
+        dice_loss = self.mask_dice_criterion(mask_logits, gt_masks)
+        mask_loss = bce_loss + dice_loss
 
         topo_gt, topo_loss_mask = batch['connected'].to(torch.int32), valid.to(torch.float32)
         # [B, N_samples, N_pairs, 1]
@@ -1117,8 +1150,8 @@ class SAMRoad(pl.LightningModule):
         for nan_index in torch.nonzero(torch.isnan(topo_loss[:, :, :, 0])):
             print('nan index: B, Sample, Pair')
             print(nan_index)
-            import pdb
-            pdb.set_trace() # 如果发现 NaN 值，进入调试模式
+            # import pdb
+            # pdb.set_trace() # 如果发现 NaN 值，进入调试模式
 
         #### DEBUG NAN
 
@@ -1129,6 +1162,7 @@ class SAMRoad(pl.LightningModule):
 
         loss = mask_loss + topo_loss
         self.log('train_bce_loss', bce_loss, on_step=True, on_epoch=False, prog_bar=True, sync_dist=True)
+        self.log('train_dice_loss', dice_loss, on_step=True, on_epoch=False, prog_bar=True, sync_dist=True)
         self.log('train_mask_loss', mask_loss, on_step=True, on_epoch=False, prog_bar=True, sync_dist=True)
         self.log('train_topo_loss', topo_loss, on_step=True, on_epoch=False, prog_bar=True, sync_dist=True)
         self.log('train_loss', loss, on_step=True, on_epoch=False, prog_bar=True, sync_dist=True)
@@ -1211,9 +1245,10 @@ class SAMRoad(pl.LightningModule):
 
         gt_masks = torch.stack([keypoint_mask, road_mask], dim=3)
 
-        # mask_loss = self.mask_criterion(mask_logits, gt_masks)
+        # Compute BCE loss and Dice loss
         bce_loss = self.mask_criterion(mask_logits, gt_masks)
-        mask_loss = bce_loss
+        dice_loss = self.mask_dice_criterion(mask_logits, gt_masks)
+        mask_loss = bce_loss + dice_loss
 
         topo_gt, topo_loss_mask = batch['connected'].to(torch.int32), valid.to(torch.float32)
         # [B, N_samples, N_pairs, 1]
@@ -1222,6 +1257,7 @@ class SAMRoad(pl.LightningModule):
         topo_loss = topo_loss.sum() / topo_loss_mask.sum()
         loss = mask_loss + topo_loss
         self.log('val_bce_loss', bce_loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+        self.log('val_dice_loss', dice_loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
         self.log('val_mask_loss', mask_loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True) # about 0.6
         self.log('val_topo_loss', topo_loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True) # about 0.8
         self.log('val_loss', loss, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)

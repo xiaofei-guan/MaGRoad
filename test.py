@@ -6,6 +6,7 @@ from datamodule import SamRoadDataModule
 
 from utils import load_config
 from model import SAMRoad
+from sam_road_plus_model import SAMRoadplus
 
 import wandb
 
@@ -43,8 +44,13 @@ if __name__ == "__main__":
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.enabled = True
     
-
-    net = SAMRoad(config)
+    model_name = config.MODEL_NAME
+    if model_name == 'SAMRoadplus':
+        net = SAMRoadplus(config)
+    elif model_name == 'SAMRoad':
+        net = SAMRoad(config)
+    else:
+        raise ValueError(f"Invalid model name: {model_name}")
     dm = SamRoadDataModule(config, dev_run=False)
 
     checkpoint_callback = ModelCheckpoint(every_n_epochs=1, save_top_k=-1)
@@ -61,7 +67,7 @@ if __name__ == "__main__":
         # strategy='ddp_find_unused_parameters_true',
         precision=args.precision,
         accelerator="gpu",          # 指定使用 GPU
-        devices=[0],
+        devices=[3],
         logger=tb_logger,
         # profiler=profiler
         )
