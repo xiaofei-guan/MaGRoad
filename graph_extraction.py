@@ -7,7 +7,7 @@ import tcod
 from sklearn.neighbors import KDTree
 from skimage.draw import line
 import networkx as nx
-from graph_utils import nms_points
+from graph_utils import nms_points, nms_points_old
 
 
 IMAGE_SIZE = 2048
@@ -22,7 +22,7 @@ def read_rgb_img(path):
 
 # returns (x, y)
 def get_points_and_scores_from_mask(mask, threshold):
-    rcs = np.column_stack(np.where(mask > threshold)) # n 行 2列
+    rcs = np.column_stack(np.where(mask > threshold)) # n rows, 2 columns
     xys = rcs[:, ::-1]
     scores = mask[mask > threshold]
     return xys, scores
@@ -86,9 +86,9 @@ def is_connected_bresenham(cost, start, end):
     return max_cost < 255
 
 
-#  A* 算法（A* pathfinding algorithm）判断图像中两个点之间是否连通。
-#  它使用 A* 算法来寻找从起点到终点的路径，并检查路径是否存在
-#  以及路径的长度是否在规定的最大长度
+#  A* algorithm (A* pathfinding algorithm) checks if two points in an image are connected.
+#  It uses the A* algorithm to find a path from the start point to the end point, and checks if the path exists
+#  and the length of the path is within the maximum allowed length
 def is_connected_astar(pathfinder, cost, start, end, max_path_len):
     # we can still modify the cost matrix after creating the pathfinder with it
     # seems pathfinder uses reference
@@ -107,7 +107,7 @@ def is_connected_astar(pathfinder, cost, start, end, max_path_len):
     return connected
 
 
-# 确保道路区域的代价值较低，而非道路区域或关键点附近的代价值较高
+# Ensure the cost value of the road region is low, while the cost value of the non-road region or the region near the keypoint is high
 def create_cost_field(sample_pts, road_mask):
     # road mask shall be uint8 normalized to 0-255
     cost_field = np.zeros(road_mask.shape, dtype=np.uint8)
@@ -131,18 +131,27 @@ def create_cost_field_astar(sample_pts, road_mask, block_threshold=200):
     return cost_field
 
 
-# 如果road_mask是0-255，第三次nms时把所有的road_score设置为0是不公平的，
-# 因为有些road_kp的score更高，如果road_mask是binary，则不需要修改
-def extract_graph_points(keypoint_mask, road_mask, config):
-    kp_candidates, kp_scores = get_points_and_scores_from_mask(keypoint_mask, config.ITSC_THRESHOLD * 255)
-    kps_0 = nms_points(kp_candidates, kp_scores, config.ITSC_NMS_RADIUS)
-    kp_candidates, kp_scores = get_points_and_scores_from_mask(road_mask, config.ROAD_THRESHOLD * 255)
-    kps_1 = nms_points(kp_candidates, kp_scores, config.ROAD_NMS_RADIUS)
-    # prioritize intersection points
-    kp_candidates = np.concatenate([kps_0, kps_1], axis=0)
-    kp_scores = np.concatenate([np.ones((kps_0.shape[0])), np.zeros((kps_1.shape[0]))], axis=0)
-    kps = nms_points(kp_candidates, kp_scores, config.ROAD_NMS_RADIUS)
-    return kps
+def extract_graph_points(keypoint_mask, road_mask, config, use_fast_nms=True):
+    if use_fast_nms:
+        kp_candidates, kp_scores = get_points_and_scores_from_mask(keypoint_mask, config.ITSC_THRESHOLD * 255)
+        kp_scores = kp_scores + 0.9 # assign higher score to preserve keypoints
+        road_candidates, road_scores = get_points_and_scores_from_mask(road_mask, config.ROAD_THRESHOLD * 255)
+        all_candidates = np.concatenate([kp_candidates, road_candidates], axis=0)
+        all_scores = np.concatenate([kp_scores, road_scores], axis=0)
+        # Assuming ROAD_NMS_RADIUS is the primary radius for suppression
+        all_points = nms_points(all_candidates, all_scores, config.ROAD_NMS_RADIUS + 5)
+        return all_points
+    else:
+        # Original 3-pass NMS logic
+        kp_candidates, kp_scores = get_points_and_scores_from_mask(keypoint_mask, config.ITSC_THRESHOLD * 255)
+        kps_0 = nms_points_old(kp_candidates, kp_scores, config.ITSC_NMS_RADIUS)
+        kp_candidates, kp_scores = get_points_and_scores_from_mask(road_mask, config.ROAD_THRESHOLD * 255)
+        kps_1 = nms_points_old(kp_candidates, kp_scores, config.ROAD_NMS_RADIUS)
+        # prioritize intersection points
+        kp_candidates = np.concatenate([kps_0, kps_1], axis=0)
+        kp_scores = np.concatenate([np.ones((kps_0.shape[0])), np.zeros((kps_1.shape[0]))], axis=0)
+        kps = nms_points_old(kp_candidates, kp_scores, config.ROAD_NMS_RADIUS)
+        return kps
 
 
 def extract_graph_astar(keypoint_mask, road_mask, config):

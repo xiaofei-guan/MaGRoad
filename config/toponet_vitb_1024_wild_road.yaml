@@ -1,0 +1,70 @@
+DATASET: 'wildroad'
+MODEL_NAME: 'MaGRoad' # MaGRoad, SAMRoadplus
+
+# IN1k + MAE only
+NO_SAM: False
+
+SAM_VERSION: 'vit_b'
+SAM_CKPT_PATH: 'sam/ckpt/sam_vit_b_01ec64.pth'
+PATCH_SIZE: 1024
+BATCH_SIZE: 4
+DATA_WORKER_NUM: 8
+TRAIN_EPOCHS: 25
+BASE_LR: 0.001
+FREEZE_ENCODER: False
+ENCODER_LR_FACTOR: 0.1
+ENCODER_LORA: False
+FOCAL_LOSS: False
+USE_SAM_DECODER: False
+USE_FAST_NMS: False # [True, False] this parameter is used in training and inference
+
+# TOPONET
+# sample per patch
+TOPO_SAMPLE_NUM: 256
+TOPONET: 'maGTopoNet' # transformer, maGTopoNet
+TOPONET_VERSION: 'normal' # no_tgt_features, no_offset, no_features, normal
+NUM_INTERPOLATIONS: 32
+
+# for ablation study
+USE_POINT_FEATURES: False
+USE_EDGE_BIAS: True
+USE_GEOMETRIC_FEATURES: True
+USE_PATH_FEATURES: True
+
+POOL_KERNEL_SIZES: [3, 9, 15] # [ # [1, 7, 13]
+ANGLE_SIGMA: 0.523598775598 # pi/6 0.523598775598 # pi/4 0.7853981633974483 
+LAMBDA_TURN: 0.4
+LAMBDA_COMPETE: 0.2 # 0.1
+
+# loss config
+BCE_POS_WEIGHT: 10.0
+
+# Inference
+# INFER: 'infer' [infer, train] # reproduce samroadplus on wild_road dataset
+# This parameter is used only by the samroadplus model because the Node-guided resampling strategy is only applied during training and is not used during inference.
+# Refer to the source files `samroadplus/modelinfer.py` and `samroadplus/model.py` for details, as there are two versions of toponet in the source code.
+
+INFER_BATCH_SIZE: 16
+SAMPLE_MARGIN: 0
+INFER_PATCHES_PER_EDGE: 16
+
+# ======= topo ======
+# Best threshold 0.373291, P=0.984446 R=0.985454 F1=0.984950
+# ========kp==========
+# Best threshold (uint8) = 34, float=0.133333, P=0.291688 R=0.493076 F1=0.366541
+# ======road mask=======
+# Best threshold (uint8) = 214, float=0.839216, P=0.757051 R=0.804214 F1=0.779920
+
+ITSC_THRESHOLD: 0.133
+ROAD_THRESHOLD: 0.839
+TOPO_THRESHOLD: 0.373
+# pixels
+ITSC_NMS_RADIUS: 50
+ROAD_NMS_RADIUS: 50
+NEIGHBOR_RADIUS: 200
+MAX_NEIGHBOR_QUERIES: 16
+
+SUBDIVIDE_RESOLUTION: 20
+INTERESTING_RADIUS: 100 
+INTR_SAMPLE_WEIGHT: 2.0
+NOISE_SCALE: 3.0

@@ -1,24 +1,14 @@
 from argparse import ArgumentParser
-import numpy as np
-from pytorch_lightning.core import datamodule
 import torch
-import torch.nn as nn
-from datamodule import SamRoadDataModule
+from datasets.datamodule import DataSetModule
 
 from utils import load_config
-from model import SAMRoad
+from model import MaGRoad
 from sam_road_plus_model import SAMRoadplus
 
-# import wandb
-
-# import lightning.pytorch as pl
 import pytorch_lightning as pl
-
-# from lightning.pytorch.callbacks import ModelCheckpoint
 from pytorch_lightning.callbacks import ModelCheckpoint
-# from lightning.pytorch.loggers import WandbLogger
 from pytorch_lightning.loggers import TensorBoardLogger
-# from lightning.pytorch.callbacks import LearningRateMonitor
 from pytorch_lightning.callbacks import LearningRateMonitor
 import datetime
 
@@ -50,37 +40,26 @@ if __name__ == "__main__":
     config = load_config(args.config)
     dev_run = args.dev_run or args.fast_dev_run
 
-    # Remove wandb initialization
-    # wandb.init(
-    #     # set the wandb project where this run will be logged
-    #     project="sam_road",
-    #     # track hyperparameters and run metadata
-    #     config=config,
-    #     # disable wandb if debugging
-    #     mode='disabled' if dev_run else None,
-    #     # mode='disabled',
-    # )
 
     # Good when model architecture/input shape are fixed.
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.enabled = True
-    torch.set_float32_matmul_precision('high') # 设置混合精度
-    pl.seed_everything(seed=3407, workers=True) # 设置随机种子 3407
+    torch.set_float32_matmul_precision('high')
+    pl.seed_everything(seed=3407, workers=True)
 
-    model_name = config.get("MODEL_NAME", "SAMRoad")
+    model_name = config.get("MODEL_NAME", "MaGRoad")
 
-    if model_name == "SAMRoad":
-        net = SAMRoad(config)
+    if model_name == "MaGRoad":
+        net = MaGRoad(config)
     elif model_name == "SAMRoadplus":
         net = SAMRoadplus(config)
     else:
         raise ValueError(f"Invalid model name: {model_name}")
 
-    dm = SamRoadDataModule(config, dev_run=dev_run)
+    dm = DataSetModule(config, dev_run=dev_run)
 
     checkpoint_callback = ModelCheckpoint(
-        dirpath=f"/data20t/guanwenfei/ckpt/wild_data/V_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
-        # dirpath="/data20t/guanwenfei/ckpt/wild_data/V_20251011163400",
+        dirpath=f"lightning_logs/wild_road_training/ckpt/V_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
         filename="{epoch:02d}-{step:05d}-{val_loss:.4f}",
         every_n_epochs=1,
         save_top_k=-1,
@@ -91,51 +70,28 @@ if __name__ == "__main__":
     )
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
-    # Replace wandb logger with TensorBoardLogger
-    # wandb_logger = WandbLogger()
-    tb_logger = TensorBoardLogger("lightning_logs", name="wild_data_train")
-
-    # from lightning.pytorch.profilers import AdvancedProfiler
-    # profiler = AdvancedProfiler(dirpath='profile', filename='result_fast_matcher')
+    tb_logger = TensorBoardLogger("lightning_logs", name="wild_road_train")
 
     trainer = pl.Trainer(
         max_epochs=config.TRAIN_EPOCHS,
         check_val_every_n_epoch=1,
         num_sanity_val_steps=2,
         callbacks=[checkpoint_callback, lr_monitor],
-        logger=tb_logger,  # Use TensorBoard logger instead of WandbLogger
+        logger=tb_logger,
         fast_dev_run=args.fast_dev_run,
         # strategy='ddp_find_unused_parameters_true',
         precision=args.precision,
         # profiler=profiler
         log_every_n_steps=4,
-        # --- DDP 配置 ---
-        strategy='ddp_find_unused_parameters_true', # 或者 'ddp_find_unused_parameters_true' 如果遇到未使用参数的错误
+        strategy='ddp_find_unused_parameters_true',
         # strategy='auto',
-        accelerator="gpu",          # 指定使用 GPU
+        accelerator="gpu",
         devices=[3],
         )
 
 
-    if args.resume:        
-        if model_name == "SAMRoad":
-            net = SAMRoad.load_from_checkpoint(
-                "/data20t/guanwenfei/ckpt/wild_data/version_1/epoch=17-step=17874-val_loss=0.4003.ckpt",
-                config=config,  # 传入修改后的 config
-                strict=False    # 如果模型结构有变化，设置为 False
-            )
-        elif model_name == "SAMRoadplus":
-            net = SAMRoadplus.load_from_checkpoint(
-                "/data20t/guanwenfei/ckpt/wild_data/V_20251011163400/epoch=07-step=15888-val_loss=0.4165.ckpt",
-                config=config,
-                strict=False
-            )
-        else:
-            raise ValueError(f"Invalid model name: {model_name}")
-            
-        trainer.fit(net, datamodule=dm)
-
-        # trainer.fit(net, datamodule=dm, ckpt_path="/data20t/guanwenfei/ckpt/wild_data/V_20251011163400/epoch=07-step=15888-val_loss=0.4165.ckpt")
+    if args.resume:
+        print(f"Resuming training from checkpoint: {args.resume}")
+        trainer.fit(net, datamodule=dm, ckpt_path=args.resume)
     else:
         trainer.fit(net, datamodule=dm)
-    # trainer.fit(net, datamodule=dm)
