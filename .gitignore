@@ -1,5 +1,4 @@
-spacenet
-cityscale
+
 *.pyc
 *.lprof
 *.png
@@ -13,6 +12,11 @@ sam/segment_anything/__pycache__
 /cityscale_metrics/*.json
 /logs
 /code_backup
+
+spacenet
+cityscale
+cityscale_metrics
+spacenet_metrics
 
 wild_data/*
 compute_threshold/dump/
