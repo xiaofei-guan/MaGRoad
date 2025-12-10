@@ -37,3 +37,7 @@ globalscale/globalscale_metrics/result/*
 globalscale/preprocess_data/__pycache__
 
 /temp
+
+dataset.py
+test.py
+datamodule.py
