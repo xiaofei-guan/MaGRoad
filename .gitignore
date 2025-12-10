@@ -33,11 +33,12 @@ wildroad_metrics/result
 
 globalscale/Globalscale
 globalscale/Globalscale*/
-globalscale/globalscale_metrics/result/*
 globalscale/preprocess_data/__pycache__
+globalscale_metrics/result/*
 
 /temp
 
 dataset.py
 test.py
 datamodule.py
+compute_threshold/readme.md
