@@ -19,7 +19,6 @@ USE_SAM_DECODER: False
 USE_FAST_NMS: False # [True, False] this parameter is used in training and inference
 
 # TOPONET
-# sample per patch
 TOPO_SAMPLE_NUM: 256
 TOPONET: 'maGTopoNet' # transformer, maGTopoNet
 TOPONET_VERSION: 'normal' # no_tgt_features, no_offset, no_features, normal
@@ -44,7 +43,7 @@ BCE_POS_WEIGHT: 10.0
 # This parameter is used only by the samroadplus model because the Node-guided resampling strategy is only applied during training and is not used during inference.
 # Refer to the source files `samroadplus/modelinfer.py` and `samroadplus/model.py` for details, as there are two versions of toponet in the source code.
 
-INFER_BATCH_SIZE: 16
+INFER_BATCH_SIZE: 8
 SAMPLE_MARGIN: 0
 INFER_PATCHES_PER_EDGE: 16
 

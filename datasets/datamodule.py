@@ -58,6 +58,9 @@ class DataSetModule(pl.LightningDataModule):
             worker_init_fn=_limit_lib_threads,
             collate_fn=graph_collate_fn,
         )
+    
+    # For the Globalscale dataset, you can adjust the parameters of Dataloader to speed up training,
+    # but be careful to avoid CPU memory explosion!
 
     def val_dataloader(self):
         return DataLoader(

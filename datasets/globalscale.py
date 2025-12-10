@@ -208,11 +208,15 @@ class GraphLabelGenerator():
         # raise scores for intersction points so they are always kept
         nms_scores = np.random.uniform(low=0.9, high=1.0, size=patch_indices.shape[0])
         nms_score_override = self.nms_score_override[patch_indices]
-        nms_scores = np.maximum(nms_scores, nms_score_override) # 采样点的得分都在0.9-1.0之间，intersection得分为2.0
+        nms_scores = np.maximum(nms_scores, nms_score_override) # sample scores are between 0.9 and 1.0, intersection score is 2.0
         nms_radius = self.config.ROAD_NMS_RADIUS
 
         # kept_indces are into the patch_points array
-        nmsed_points, kept_indices = graph_utils.nms_points(patch_points, nms_scores, radius=nms_radius,
+        if self.config.USE_FAST_NMS:
+            nmsed_points, kept_indices = graph_utils.nms_points_traning(patch_points, nms_scores, radius=nms_radius,
+                                                                return_indices=True)
+        else:
+            nmsed_points, kept_indices = graph_utils.nms_points_old(patch_points, nms_scores, radius=nms_radius,
                                                             return_indices=True)
         # now this is into the subdivide graph
         nmsed_indices = patch_indices[kept_indices]
@@ -234,7 +238,7 @@ class GraphLabelGenerator():
         # [n_sample, n_nbr]
         # k+1 because the nearest one is always self
         knn_d, knn_idx = nmsed_kdtree.query(sampled_points, k=max_nbr_queries + 1, distance_upper_bound=radius)
-        # knn_d inf 填充, knn_idx num_points + 1 填充
+        # knn_d inf padding, knn_idx num_points + 1 padding
         samples = []
 
         for i in range(sample_num): # 512
@@ -280,7 +284,7 @@ class GraphLabelGenerator():
             [0, 1, 0],
             [-1, 0, 0],
             [0, 0, 1],
-        ], dtype=np.float32) # 先平移原点(0, 0)到中心位置(256, 256)，再饶中心位置旋转90度，再逆向平移
+        ], dtype=np.float32)
         nmsed_points = nmsed_points @ trans.T @ np.linalg.matrix_power(rot.T, rot_index) @ np.linalg.inv(trans.T)
         nmsed_points = nmsed_points[:, :2]
 
@@ -414,23 +418,26 @@ class GlobalScaleSatMapDataset(Dataset):
         if dataset_name == 'globalscale':
             self.IMAGE_SIZE = 2048
             self.SAMPLE_MARGIN = config.SAMPLE_MARGIN
-            # precomputed_dir = '/data20t/guanwenfei/dataset/Globalscale_GLG/train_test_3338'
-            # rgb_pattern = './globalscale/train/region_{}_sat.png'
-            # keypoint_mask_pattern = './globalscale/Globalscale_mask/train/keypoint_mask_{}.png'
-            # road_mask_pattern = './globalscale/Globalscale_mask/train/road_mask_{}.png'
 
-            # for ood
-            precomputed_dir = '/data20t/guanwenfei/dataset/Globalscale_GLG/ood_130'
-            rgb_pattern = '/data20t/guanwenfei/dataset/Globalscale/out_of_domain/region_{}_sat.png'
-            keypoint_mask_pattern = '/data20t/guanwenfei/dataset/Globalscale_mask/out_of_domain/keypoint_mask_{}.png'
-            road_mask_pattern = '/data20t/guanwenfei/dataset/Globalscale_mask/out_of_domain/road_mask_{}.png'
-            train, val, test, test_out = globalscale_data_partition()
+            # for in-domain
+            precomputed_dir = './globalscale/Globalscale_GLG/train_GLG'
+            rgb_pattern = './globalscale/Globalscale/train/region_{}_sat.png'
+            keypoint_mask_pattern = './globalscale/Globalscale_mask/train/keypoint_mask_{}.png'
+            road_mask_pattern = './globalscale/Globalscale_mask/train/road_mask_{}.png'
+
+            # for out-of-domain
+            # precomputed_dir = './globalscale/Globalscale_GLG/out_of_domain_GLG'
+            # rgb_pattern = './globalscale/Globalscale/out_of_domain/region_{}_sat.png'
+            # keypoint_mask_pattern = './globalscale/Globalscale_mask/out_of_domain/keypoint_mask_{}.png'
+            # road_mask_pattern = './globalscale/Globalscale_mask/out_of_domain/road_mask_{}.png'
+
+            train, val, test, test_ood = globalscale_data_partition()
             train_split = train + val
-            # test_split = test # test in_domain
-            test_split = test_out # test out_of_domain
+            test_split = test # test in_domain
+            # test_split = test_ood # test out_of_domain
         
         else:
-            raise ValueError(f"Unknown DATASET: {dataset_name}. Supported: 'globalscale', 'wild_data'")
+            raise ValueError(f"Unknown DATASET: {dataset_name}. only supported: 'globalscale'")
 
         tile_indices = train_split if self.is_train else test_split
 
@@ -489,12 +496,6 @@ class GlobalScaleSatMapDataset(Dataset):
                 return 84667
             elif self.config.DATASET == 'globalscale':
                 # return max(1, int(self.IMAGE_SIZE / self.config.PATCH_SIZE)) ** 2 * len(self.rgb_paths) * 5 # patch_num * img_num * sample_times
-                return len(self.rgb_paths)
-            elif self.config.DATASET == 'dataset_simplified':
-                return len(self.rgb_paths)
-            elif self.config.DATASET == 'map_patches':
-                return len(self.rgb_paths)
-            elif self.config.DATASET == 'dataset':
                 return len(self.rgb_paths)
         else:
             return len(self.eval_patches)

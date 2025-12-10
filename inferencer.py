@@ -7,9 +7,8 @@ import cv2
 import re
 
 
-from utils import load_config, create_output_dir_and_save_config
-from dataset import cityscale_data_partition, read_rgb_img, get_patch_info_one_img
-from dataset import spacenet_data_partition, globalscale_data_partition
+from utils import load_config
+from datasets.wildroad import cityscale_data_partition, spacenet_data_partition, globalscale_data_partition, read_rgb_img
 from model import MaGRoad
 from sam_road_plus_model import SAMRoadplus
 import graph_extraction
@@ -392,8 +391,8 @@ if __name__ == "__main__":
     elif config.DATASET == 'globalscale':
         # _, _, test_img_indices, _ = globalscale_data_partition() # for in-domain
         _, _, _, test_img_indices = globalscale_data_partition() # for out-of-domain
-        # rgb_pattern = './globalscale/train/region_{}_sat.png' # for in-domain
-        rgb_pattern = './globalscale/out_of_domain/region_{}_sat.png' # for out-of-domain
+        # rgb_pattern = './globalscale/Globalscale/train/region_{}_sat.png' # for in-domain
+        rgb_pattern = './globalscale/Globalscale/out_of_domain/region_{}_sat.png' # for out-of-domain
 
     elif config.DATASET == 'wildroad':
         test_img_indices = list(range(34))

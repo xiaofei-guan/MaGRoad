@@ -2,7 +2,6 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-# from torchvision.ops import nms
 import matplotlib.pyplot as plt
 import math
 import copy
@@ -11,7 +10,6 @@ import os
 from functools import partial
 from torchmetrics.classification import BinaryJaccardIndex, F1Score, BinaryPrecisionRecallCurve
 
-# import lightning.pytorch as pl
 import pytorch_lightning as pl
 
 from sam.segment_anything.modeling.image_encoder import ImageEncoderViT
@@ -20,7 +18,6 @@ from sam.segment_anything.modeling.prompt_encoder import PromptEncoder
 from sam.segment_anything.modeling.transformer import TwoWayTransformer
 from sam.segment_anything.modeling.common import LayerNorm2d
 
-# import wandb # Use wandb to track machine learning work
 import pprint
 import torchvision
 import numpy as np
@@ -28,6 +25,7 @@ import numpy as np
 import vitdet
 from typing import Optional, List
 from fvcore.nn import FlopCountAnalysis
+
 
 class BilinearSampler(nn.Module):
     def __init__(self, image_size):
@@ -193,11 +191,11 @@ def sample_line_points(src: torch.Tensor, dst: torch.Tensor, num_samples: int) -
 
 class GeodesicPathExtractor(nn.Module):
     """
-    轻量、可微的路径感知特征提取器：
-    - 从 mask_logits 的 road 概率图上，在直线段上等距采样
-    - 多尺度平滑（avg pooling）后重复采样
-    - 统计特征：mean / std / softmin（对(1-p)取softmin，近似最差路段）
-    返回 [B, E, F_path] 的向量（E 为边数 S*K）
+    Lightweight, differentiable path-aware feature extractor:
+    - Sample equidistant points on the line segments from the road probability map in mask_logits
+    - Sample multiple times after multi-scale smoothing (avg pooling)
+    - Statistical features: mean / std / softmin (softmin of (1-p), approximate worst road)
+    Return [B, E, F_path] vector (E is number of edges, S*K)
     """
     def __init__(self, image_size: int, num_samples: int = 32,
                  pool_kernel_sizes: Optional[List[int]] = None,
@@ -205,7 +203,7 @@ class GeodesicPathExtractor(nn.Module):
         super().__init__()
         self.image_size = image_size
         self.num_samples = num_samples
-        self.pool_kernel_sizes = pool_kernel_sizes or [1, 5, 11]  # 1=原图, 再两种平滑
+        self.pool_kernel_sizes = pool_kernel_sizes or [1, 5, 11]  # 1=original image, then two smoothing
         self.tau = tau_softmin
 
     def forward(self, mask_logits: torch.Tensor,
@@ -213,7 +211,7 @@ class GeodesicPathExtractor(nn.Module):
                 dst_points: torch.Tensor   # [B, E, 2]
                 ) -> torch.Tensor:
         """
-        mask_logits: [B, 2, H, W], road prob 在通道1
+        mask_logits: [B, 2, H, W], road probability in channel 1
         src_points/dst_points: [B, E, 2] in [0, image_size]
         return: [B, E, F_path]
         """
@@ -221,7 +219,7 @@ class GeodesicPathExtractor(nn.Module):
         assert H == self.image_size and W == self.image_size, "mask size mismatch"
         road_prob = torch.sigmoid(mask_logits[:, 1:2])  # [B,1,H,W]
 
-        # 准备采样点
+        # prepare sampling points
         pts = sample_line_points(src_points, dst_points, self.num_samples)  # [B, E, S, 2]
         pts_norm = normalize_grid(pts, self.image_size)  # [-1,1]
         grid = pts_norm.view(B, -1, 1, 2)  # [B, E*S, 1, 2]
@@ -234,11 +232,11 @@ class GeodesicPathExtractor(nn.Module):
                 pad = ksz // 2
                 smoothed = F.avg_pool2d(road_prob, kernel_size=ksz, stride=1, padding=pad)
 
-            # 采样：grid_sample 输入是 [B,C,H,W] 和 [B, N, 1, 2]
+            # sampling: grid_sample input is [B,C,H,W] and [B, N, 1, 2]
             sampled = F.grid_sample(smoothed, grid, mode='bilinear', align_corners=False)  # [B,1,E*S,1]
             sampled = sampled.view(B, -1, self.num_samples)  # [B, E, S]
 
-            # 统计
+            # statistics
             mean_v = sampled.mean(dim=-1, keepdim=True)                         # [B,E,1]
             std_v  = sampled.std(dim=-1, unbiased=False, keepdim=True)          # [B,E,1]
             softmin_v = softmin(1.0 - sampled, dim=-1, tau=self.tau).unsqueeze(-1)  # [B,E,1]
@@ -251,8 +249,8 @@ class GeodesicPathExtractor(nn.Module):
 
 class BiasedSelfAttentionLayer(nn.Module):
     """
-    自定义带“加性偏置”的多头自注意力层 + FFN
-    支持 batch-wise 的 [B, L, L] 形状偏置矩阵 bias
+    Customized multi-head self-attention layer with "additive bias" + FFN
+    Support batch-wise [B, L, L] shape bias matrix bias
     """
     def __init__(self, d_model: int, nhead: int, dim_ff: int, dropout: float = 0.1):
         super().__init__()
@@ -275,7 +273,7 @@ class BiasedSelfAttentionLayer(nn.Module):
         self.norm2 = nn.LayerNorm(d_model)
 
     def forward(self, x: torch.Tensor,
-                key_padding_mask: Optional[torch.Tensor] = None,  # [B,L], True 表示要mask掉的位置
+                key_padding_mask: Optional[torch.Tensor] = None,  # [B,L], True means to mask the position
                 bias: Optional[torch.Tensor] = None               # [B,L,L]
                 ) -> torch.Tensor:
         """
@@ -292,11 +290,11 @@ class BiasedSelfAttentionLayer(nn.Module):
         attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.dk)  # [B,h,L,L]
 
         if bias is not None:
-            # 扩展到各个头
+            # expand to each head
             attn_scores = attn_scores + bias.unsqueeze(1)  # [B,1,L,L] -> [B,h,L,L]
 
         if key_padding_mask is not None:
-            # mask 掉无效的 key：把它对应列置为 -inf
+            # mask invalid keys: set the corresponding column to -inf
             # key_padding_mask: [B, L], True=pad
             mask = key_padding_mask.unsqueeze(1).unsqueeze(2)  # [B,1,1,L]
             attn_scores = attn_scores.masked_fill(mask, float('-inf'))
@@ -322,38 +320,38 @@ def build_edge_bias(src_xy: torch.Tensor,
                     lambda_turn: float = 0.6,
                     lambda_compete: float = 0.2) -> torch.Tensor:
     """
-    在“同一源点的一组候选边”内构造边-边的注意力偏置矩阵：
-    - turn 兼容度：Δθ 越小越相容（高斯核）
-    - 竞争先验：非对角线统一施加负偏置，鼓励稀疏选择
-    src_xy/dst_xy: [B, L, 2]（这里的 B 实际是 B*S，L 是 N_pairs）
-    valid: [B, L]，True为有效
+    Construct edge-edge attention bias matrix within a group of candidate edges at the same source point:
+    - turn compatibility: smaller Δθ is more compatible (Gaussian kernel)
+    - Competitive prior: negative bias is applied to off-diagonal, encouraging sparse selection
+    src_xy/dst_xy: [B, L, 2] (here B is actually B*S, L is N_pairs)
+    valid: [B, L], True means valid
     return: bias [B, L, L]
     """
     B, L, _ = src_xy.shape
     offset = dst_xy - src_xy  # [B,L,2]
     angle = torch.atan2(offset[..., 1], offset[..., 0])  # [B,L]
 
-    # pairwise Δθ，映射到 [-pi, pi]
+    # pairwise Δθ, mapped to [-pi, pi]
     theta_i = angle.unsqueeze(-1)           # [B,L,1]
     theta_j = angle.unsqueeze(-2)           # [B,1,L]
     delta = theta_i - theta_j               # [B,L,L]
     delta = (delta + math.pi) % (2 * math.pi) - math.pi
 
     k_turn = torch.exp(- (delta ** 2) / (2 * (angle_sigma ** 2)))  # [B,L,L]
-    bias_turn = lambda_turn * (k_turn - 0.5)                        # 居中
+    bias_turn = lambda_turn * (k_turn - 0.5)                        
 
-    # 竞争先验：对 off-diagonal 施加 -lambda_compete
+    # Competitive prior: negative bias is applied to off-diagonal, encouraging sparse selection
     eye = torch.eye(L, device=src_xy.device).unsqueeze(0)          # [1,L,L]
     off_diag = 1.0 - eye
     bias_comp = -lambda_compete * off_diag                          # [1,L,L] -> broadcast
 
     bias = bias_turn + bias_comp
 
-    # 对无效边，避免与任何人产生正向偏置：置 0（实际会由 key_padding_mask 屏蔽）
+    # For invalid edges, avoid positive bias with anyone: set to 0 (actually masked by key_padding_mask)
     v = valid.float()
     bias = bias * v.unsqueeze(-1) * v.unsqueeze(-2)
 
-    # 主对角设为0
+    # Set the main diagonal to 0
     bias = bias * off_diag + 0.0 * eye
     return bias  # [B,L,L]
 
@@ -361,11 +359,11 @@ def build_edge_bias(src_xy: torch.Tensor,
 class MaGTopoNet(nn.Module):
     """
     Mask-aware Geodesic Line-Graph Transformer
-    - 可选使用 point_features（图像特征）
-    - 使用几何编码（offset/dist/angle-Fourier）
-    - 使用路径特征（在 road prob 上沿直线多尺度采样统计）
-    - 在“每个 sample 的候选边集合”上做带偏置的自注意力
-    接口保持与 TopoNet 一致
+    - Optional use of point_features (image features)
+    - Use geometric encoding (offset/dist/angle-Fourier)
+    - Use path features (multi-scale sampling statistics on the road prob)
+    - Do self-attention with biased on the "candidate edge set for each sample"
+    Interface kept consistent with TopoNet
     """
     def __init__(self, config, feature_dim: int,
                  use_point_features: bool = True,
@@ -384,18 +382,18 @@ class MaGTopoNet(nn.Module):
         self.use_edge_bias = use_edge_bias
         self.use_geometric_features = use_geometric_features
 
-        # 节点特征投影
+        # node feature projection
         if self.use_point_features:
             self.node_proj = nn.Linear(feature_dim, self.hidden_dim)
 
-        # 几何特征编码：dx,dy + dist + angle fourier(8) -> H/2
+        # geometric feature encoding: dx,dy + dist + angle fourier(8) -> H/2
         if self.use_geometric_features:
             geo_in_dim = 2 + 1 + 8
             self.geo_proj = nn.Linear(geo_in_dim, self.hidden_dim // 2)
 
-        # 路径特征
+        # path feature
         if self.use_path_features:
-            # path_feat: 3 * len(scales)，默认=3*3=9
+            # path_feat: 3 * len(scales), default=3*3=9
             self.path_extractor = GeodesicPathExtractor(
                 image_size=config.PATCH_SIZE,
                 num_samples=config.NUM_INTERPOLATIONS,
@@ -404,7 +402,7 @@ class MaGTopoNet(nn.Module):
             )
             self.path_proj = nn.Linear(9, self.hidden_dim // 2)
 
-        # 融合后投影到 H
+        # fused and project to H
         fused_in = 0
         if self.use_point_features:
             fused_in += self.hidden_dim * 2
@@ -413,7 +411,7 @@ class MaGTopoNet(nn.Module):
         if self.use_path_features:
             fused_in += self.hidden_dim // 2
         
-        # 确保至少有一个特征源被启用
+        # ensure at least one feature source is enabled
         if fused_in == 0:
             raise ValueError(
                 "At least one feature type must be enabled: "
@@ -423,7 +421,7 @@ class MaGTopoNet(nn.Module):
         
         self.edge_proj = nn.Linear(fused_in, self.hidden_dim)
 
-        # 带偏置的 Transformer 编码器
+        # Transformer encoder with biased
         self.layers = nn.ModuleList([
             BiasedSelfAttentionLayer(self.hidden_dim, self.heads, dim_ff=self.hidden_dim, dropout=0.10)
             for _ in range(self.num_layers)
@@ -440,16 +438,16 @@ class MaGTopoNet(nn.Module):
         B, S, K, _ = pairs.shape
         dev = points.device
 
-        # 1) 准备索引
+        # 1) prepare indices
         pairs_flat = pairs.view(B, -1, 2)  # [B, S*K, 2]
         BE = S * K
         batch_idx = torch.arange(B, device=dev).view(-1, 1).expand(-1, BE)  # [B, S*K]
 
-        # 2) 准备坐标（无论是否使用几何特征，都需要计算以支持路径特征和边偏置）
+        # 2) prepare coordinates (whether to use geometric features, needs to be calculated to support path features and edge bias)
         src_xy = points[batch_idx, pairs_flat[:, :, 0]].float()  # [B,BE,2]
         dst_xy = points[batch_idx, pairs_flat[:, :, 1]].float()  # [B,BE,2]
         
-        # 3) 节点特征
+        # 3) node feature
         if self.use_point_features:
             node = F.gelu(self.node_proj(point_features))  # [B, N, H]
             src_idx = pairs_flat[:, :, 0]  # [B,BE]
@@ -457,7 +455,7 @@ class MaGTopoNet(nn.Module):
             src_feat = node[batch_idx, src_idx]  # [B, BE, H]
             dst_feat = node[batch_idx, dst_idx]  # [B, BE, H]
 
-        # 4) 几何特征
+        # 4) geometric feature
         if self.use_geometric_features:
             offset = dst_xy - src_xy  # [B,BE,2]
             dist = torch.norm(offset, dim=-1, keepdim=True)  # [B,BE,1]
@@ -469,13 +467,13 @@ class MaGTopoNet(nn.Module):
             geo_in = torch.cat([offset_norm, dist_norm, angle_enc], dim=-1)
             geo_feat = F.gelu(self.geo_proj(geo_in))  # [B,BE,H/2]
 
-        # 5) 路径特征（来自 mask_logits 的可微采样）
+        # 5) path feature (differentiable sampling from mask_logits)
         if self.use_path_features:
             assert mask_logits is not None, "mask_logits is required when use_path_features=True"
             path_feat_raw = self.path_extractor(mask_logits, src_xy, dst_xy)  # [B,BE,9]
             path_feat = F.gelu(self.path_proj(path_feat_raw))                 # [B,BE,H/2]
 
-        # 6) 边token融合
+        # 6) edge token fusion
         feats = []
         if self.use_point_features:
             feats.extend([src_feat, dst_feat])
@@ -484,19 +482,19 @@ class MaGTopoNet(nn.Module):
         if self.use_path_features:
             feats.append(path_feat)
         
-        # 注意：edge_bias不产生特征，只影响attention，所以这里不检查它
-        # 在__init__时已经确保至少有一个特征源被启用
+        # Note: edge_bias does not produce features, only affects attention, so it is not checked here
+        # It is ensured that at least one feature source is enabled in __init__
         edge_tok = torch.cat(feats, dim=-1)     # [B,BE, fused_in]
         edge_tok = F.gelu(self.edge_proj(edge_tok))  # [B,BE,H]
 
-        # 6) 组内（每个 sample）编码：reshape 为 [B*S, K, H]
+        # 6) within-group (each sample) encoding: reshape to [B*S, K, H]
         x = edge_tok.view(B, S, K, -1).view(B * S, K, -1)        # [B*S, K, H]
         valid = pairs_valid.view(B * S, K)                       # [B*S, K]
-        # 至少保证每组有一个True，防止全无效导致NaN
+        # ensure at least one True in each group, prevent NaN due to all invalid
         all_invalid = (valid.sum(dim=-1, keepdim=True) == 0)
         valid = torch.logical_or(valid, all_invalid)
 
-        # 7) 构造偏置
+        # 7) construct bias
         if self.use_edge_bias:
             src_xy_g = src_xy.view(B, S, K, 2).view(B * S, K, 2)
             dst_xy_g = dst_xy.view(B, S, K, 2).view(B * S, K, 2)
@@ -507,12 +505,12 @@ class MaGTopoNet(nn.Module):
         else:
             bias = None
 
-        # 8) 带偏置的自注意力编码（多层）
+        # 8) self-attention encoder with biased (multi-layer)
         key_padding_mask = ~valid  # True=pad
         for layer in self.layers:
             x = layer(x, key_padding_mask=key_padding_mask, bias=bias)  # [B*S,K,H]
 
-        # 9) 输出
+        # 9) output
         x = x.view(B, S, K, -1)
         logits = self.out(x)                     # [B,S,K,1]
         scores = torch.sigmoid(logits)
@@ -750,8 +748,12 @@ class MaGRoad(pl.LightningModule):
         
         # Add Dice Loss
         dice_smooth = self.config.get('DICE_SMOOTH', 0.6)
-        print(f"Using Dice Loss with smooth={dice_smooth}")
-        self.mask_dice_criterion = DiceLoss(smooth=dice_smooth)
+        if self.config.DATASET == 'globalscale':
+             print("Dataset is globalscale, disabling Dice Loss")
+             self.mask_dice_criterion = None
+        else:
+             print(f"Using Dice Loss with smooth={dice_smooth}")
+             self.mask_dice_criterion = DiceLoss(smooth=dice_smooth)
         
         self.topo_criterion = torch.nn.BCEWithLogitsLoss(reduction='none')
 
@@ -940,7 +942,10 @@ class MaGRoad(pl.LightningModule):
         gt_masks = torch.stack([keypoint_mask, road_mask], dim=3)
         # Compute BCE loss and Dice loss
         bce_loss = self.mask_criterion(mask_logits, gt_masks)
-        dice_loss = self.mask_dice_criterion(mask_logits, gt_masks)
+        if self.mask_dice_criterion is not None:
+            dice_loss = self.mask_dice_criterion(mask_logits, gt_masks)
+        else:
+            dice_loss = 0.0
         mask_loss = bce_loss + dice_loss
 
         topo_gt, topo_loss_mask = batch['connected'].to(torch.int32), valid.to(torch.float32)
@@ -1048,7 +1053,10 @@ class MaGRoad(pl.LightningModule):
 
         # Compute BCE loss and Dice loss
         bce_loss = self.mask_criterion(mask_logits, gt_masks)
-        dice_loss = self.mask_dice_criterion(mask_logits, gt_masks)
+        if self.mask_dice_criterion is not None:
+            dice_loss = self.mask_dice_criterion(mask_logits, gt_masks)
+        else:
+            dice_loss = 0.0
         mask_loss = bce_loss + dice_loss
 
         topo_gt, topo_loss_mask = batch['connected'].to(torch.int32), valid.to(torch.float32)
