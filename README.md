@@ -16,7 +16,7 @@
 
 ## 📖 Introduction
 
-**MagRoad** introduces a novel path-centric reasoning approach for extracting vectorized road networks, specifically designed to handle the challenges of **off-road** and **wild environments**. Unlike endpoint-centric methods (sam_road series), our model focuses on the connectivity and topology of paths, enabling robust extraction in complex terrains.
+**MagRoad** introduces a novel *path-centric* reasoning approach for extracting vectorized road networks, specifically designed to handle the challenges of off-road and wild environments. Unlike *node-centric* methods (sam_road series), our model focuses on the connectivity and topology of paths, enabling robust extraction in complex terrains.
 
 
 
@@ -24,31 +24,34 @@
   <img src="assets/intro.png" width="75%" alt="MagRoad Results"/>
 </div>
 
-Node-centric models suffer from path ambiguity due to sparse features, path-centric sampling resolves path ambiguity by leveraging evidence along the entire edge.
+*Node-centric* models suffer from path ambiguity due to sparse features, *path-centric* sampling resolves path ambiguity by leveraging evidence along the entire edge.
 
 **Key Features:**
 
-- 🤖 Robust Extraction Pipeline: Leverages path-centric reasoning for superior accuracy and reliability in complex terrains.
-  
-- 🖱️ Interactive Annotation: A lightweight, human-guided tool enabling faster, low-effort annotation and refinement.
+- 🤖Robust Extraction Pipeline: Path-centric reasoning for reliability in complex terrains.
+
+- 🖱️Interactive Annotation: Lightweight tool for faster, low-effort annotation and refinement.
   
 - 🌍 WildRoad Dataset: A new benchmark for challenging scenarios (To be released).
 
 ## 📊 Demo
 
 ### 🤖 Automated Extraction
-MaGRoad demonstrates effective road extraction results across four diverse datasets: City-Scale, Global-Scale, SpaceNet, and WildRoad.
+
 <div align="center">
   <img src="assets/demo.png" width="85%" alt="MagRoad Results"/>
 </div>
 
+MaGRoad demonstrates effective road extraction results across four diverse datasets: City-Scale, Global-Scale, SpaceNet, and WildRoad.
+
 ### 🖱️ Interactive Annotation Tool
 
-To address the bottleneck of creating large-scale vectorized datasets, we developed the **first interactive road extraction algorithm** and integrated it into a seamless **Web Application**. It transforms the workflow: instead of tedious manual plotting (e.g., QGIS), our model intelligently automates path connectivity based on sparse user clicks, drastically reducing annotation time.
 
 | **Manual Annotation (QGIS)** | **Interactive Annotation (Ours)** |
 |:----------------------------:|:---------------------------------:|
 | <img src="assets/qgis_manual.gif" width="91%" alt="Manual"/> | <img src="assets/interactive.gif" width="100%" alt="Interactive"/> |
+
+To address the bottleneck of creating large-scale vectorized datasets, we developed the **first interactive road extraction algorithm** and integrated it into a seamless **Web Application**. It transforms the workflow: instead of tedious manual plotting (e.g., QGIS), our model intelligently automates path connectivity based on sparse user clicks, drastically reducing annotation time.
 
 > 📢 **Open Source:** The full codebase for both the interactive algorithm and the annotation tool will be released to the community.
 
