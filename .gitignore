@@ -1,7 +1,7 @@
 
 *.pyc
 *.lprof
-*.png
+*.jpg
 /mydata
 /lightning_logs
 /__pycache__
@@ -42,3 +42,5 @@ dataset.py
 test.py
 datamodule.py
 compute_threshold/readme.md
+
+assets/temp

@@ -55,10 +55,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lon-top-left", type=float, default=-71.0)
     parser.add_argument("--r", type=float, default=None, help="propagation distance override (optional)")
     parser.add_argument("--workers", type=int, default=1, help="max worker threads per chunk (recommend 1)")
+    parser.add_argument("--offset", type=int, default=2714,
+                        help="Offset to add to GT IDs to match Prop IDs (default: 2714)")
     return parser.parse_args()
 
 
-def discover_ids(gt_dir: Path, prop_dir: Path, ids_filter: Optional[Iterable[str]]) -> List[str]:
+def discover_ids(gt_dir: Path, prop_dir: Path, ids_filter: Optional[Iterable[str]], offset: int = 0) -> List[str]:
     """Same ID discovery logic as original compute_topo.py"""
     gt_re = re.compile(r"region_(\d+)_.*\.(?:p|pickle)$") # for globalscale
     # gt_re = re.compile(r"data(\d+).*\.(?:p|pickle)$") # for wild_data
@@ -70,6 +72,9 @@ def discover_ids(gt_dir: Path, prop_dir: Path, ids_filter: Optional[Iterable[str
             m = gt_re.match(p.name)
             if m:
                 gt_ids.add(m.group(1))
+
+    # Apply offset to GT IDs to match Prop IDs
+    gt_ids = {str(int(id) + offset) for id in gt_ids}
 
     prop_ids = set()
     for p in prop_dir.iterdir():
@@ -128,7 +133,8 @@ def run_chunk(chunk_args: Tuple[int, List[str], Path, Path, Path, argparse.Names
     
     for rid in ids_chunk:
         # Locate input files (same logic as original)
-        gt_candidates = list(gt_dir.glob(f"region_{rid}_*.*")) # for globalscale
+        gt_id = str(int(rid) - args.offset)
+        gt_candidates = list(gt_dir.glob(f"region_{gt_id}_*.*")) # for globalscale
         # gt_candidates = list(gt_dir.glob(f"data{rid}.*")) # for wild_data
         gt_file = None
         for c in gt_candidates:
@@ -287,7 +293,7 @@ def main() -> None:
 
     # Discover all matching IDs
     ids_filter = [s for s in args.ids.split(",") if s.strip()] if args.ids else []
-    ids = discover_ids(gt_dir, prop_dir, ids_filter)
+    ids = discover_ids(gt_dir, prop_dir, ids_filter, args.offset)
     if not ids:
         raise SystemExit("No matching region IDs found between GT and proposal folders.")
 

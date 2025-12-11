@@ -46,10 +46,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lon-top-left", type=float, default=-71.0)
     parser.add_argument("--r", type=float, default=None, help="propagation distance override (optional)")
     parser.add_argument("--workers", type=int, default=1, help="max worker threads for TOPO, set 1 on Linux if hangs")
+    parser.add_argument("--offset", type=int, default=2714,
+                        help="Offset to add to GT IDs to match Prop IDs (default: 2714)")
     return parser.parse_args()
 
 
-def discover_ids(gt_dir: Path, prop_dir: Path, ids_filter: Optional[Iterable[str]]) -> List[str]:
+def discover_ids(gt_dir: Path, prop_dir: Path, ids_filter: Optional[Iterable[str]], offset: int = 0) -> List[str]:
     gt_re = re.compile(r"region_(\d+)_.*\.(?:p|pickle)$")
     prop_re = re.compile(r"(\d+)\.p$")
 
@@ -59,6 +61,9 @@ def discover_ids(gt_dir: Path, prop_dir: Path, ids_filter: Optional[Iterable[str
             m = gt_re.match(p.name)
             if m:
                 gt_ids.add(m.group(1))
+
+    # Apply offset to GT IDs to match Prop IDs
+    gt_ids = {str(int(id) + offset) for id in gt_ids}
 
     prop_ids = set()
     for p in prop_dir.iterdir():
@@ -99,7 +104,7 @@ def main() -> None:
         raise SystemExit(f"GT dir or Prop dir does not exist:\n  GT:   {gt_dir}\n  Prop: {prop_dir}")
 
     ids_filter = [s for s in args.ids.split(",") if s.strip()] if args.ids else []
-    ids = discover_ids(gt_dir, prop_dir, ids_filter)
+    ids = discover_ids(gt_dir, prop_dir, ids_filter, args.offset)
     if not ids:
         raise SystemExit("No matching region IDs found between GT and proposal folders.")
 
@@ -115,7 +120,8 @@ def main() -> None:
 
     for rid in ids:
         # Locate input files
-        gt_candidates = list(gt_dir.glob(f"region_{rid}_*.*"))
+        gt_id = str(int(rid) - args.offset)
+        gt_candidates = list(gt_dir.glob(f"region_{gt_id}_*.*"))
         gt_file = None
         for c in gt_candidates:
             if c.suffix in (".p", ".pickle"):
