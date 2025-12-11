@@ -1,7 +1,11 @@
 <h1 align="center">Beyond Endpoints: Path-Centric Reasoning for Vectorized Off-Road Network Extraction</h1>
 
+<div align="center">
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Framework: PyTorch](https://img.shields.io/badge/Framework-PyTorch-orange.svg)](https://pytorch.org/)
+
+</div>
 
 <div align="center">
 
@@ -150,7 +154,7 @@ bash wildroad_metrics/apls_topo_parallel.sh wildroad/wild_road/test pred_dir wil
 ## 📝 To-Do List
 
 - [x] Release automated extraction code (Training & Inference).
-- [ ] Organize and clean up dataset preparation scripts.
+- [x] Organize and clean up dataset preparation scripts.
 - [ ] Release **WildRoad** Dataset.
 - [ ] Release pre-trained model checkpoints.
 - [ ] Release Interactive Annotation Tool and GUI.
