@@ -1,12 +1,16 @@
-# Beyond Endpoints: Path-Centric Reasoning for Vectorized Off-Road Network Extraction
+<h1 align="center">Beyond Endpoints: Path-Centric Reasoning for Vectorized Off-Road Network Extraction</h1>
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Framework: PyTorch](https://img.shields.io/badge/Framework-PyTorch-orange.svg)](https://pytorch.org/)
 
+<div align="center">
+
 [**[ArXiv Paper]**](#) | [**[Interactive Tool]**](#) | [**[WildRoad Dataset]**](#)
 
+</div>
+
 <div align="center">
-  <img src="assets/author.png" width="90%" alt="MagRoad Results"/>
+  <img src="assets/author.png" width="100%" alt="MagRoad Results"/>
 </div>
 
 
@@ -15,16 +19,18 @@
 **MagRoad** introduces a novel path-centric reasoning approach for extracting vectorized road networks, specifically designed to handle the challenges of **off-road** and **wild environments**. Unlike endpoint-centric methods (sam_road series), our model focuses on the connectivity and topology of paths, enabling robust extraction in complex terrains.
 
 
-Node-centric models suffer from path ambiguity due to sparse features, path-centric sampling resolves path ambiguity by leveraging evidence along the entire edge.
+
 <div align="center">
-  <img src="assets/intro.png" width="80%" alt="MagRoad Results"/>
+  <img src="assets/intro.png" width="75%" alt="MagRoad Results"/>
 </div>
+
+Node-centric models suffer from path ambiguity due to sparse features, path-centric sampling resolves path ambiguity by leveraging evidence along the entire edge.
 
 **Key Features:**
 
-- 🤖 Enhanced Extraction Pipeline: A new method that delivers higher accuracy and stronger robustness in complex scenes.
+- 🤖 Robust Extraction Pipeline: Leverages path-centric reasoning for superior accuracy and reliability in complex terrains.
   
-- 🖱️ Interactive Annotation: A lightweight, human-guided tool that enables faster, more efficient correction with minimal manual effort.
+- 🖱️ Interactive Annotation: A lightweight, human-guided tool enabling faster, low-effort annotation and refinement.
   
 - 🌍 WildRoad Dataset: A new benchmark for challenging scenarios (To be released).
 
@@ -33,7 +39,7 @@ Node-centric models suffer from path ambiguity due to sparse features, path-cent
 ### 🤖 Automated Extraction
 MaGRoad demonstrates effective road extraction results across four diverse datasets: City-Scale, Global-Scale, SpaceNet, and WildRoad.
 <div align="center">
-  <img src="assets/demo.png" width="90%" alt="MagRoad Results"/>
+  <img src="assets/demo.png" width="85%" alt="MagRoad Results"/>
 </div>
 
 ### 🖱️ Interactive Annotation Tool
@@ -48,7 +54,7 @@ To address the bottleneck of creating large-scale vectorized datasets, we develo
 
 ---
 
-## 🛠️ Installation
+## 🛠️ Quick Start
 
 1. **Clone the repository**
    ```bash
@@ -154,7 +160,7 @@ If you find this work useful for your research, please cite our paper:
 @article{magroad2025,
   title={Beyond Endpoints: Path-Centric Reasoning for Vectorized Off-Road Network Extraction},
   author={Guan, Wenfei and Mei, Jilin and Shen, Tong and Wu, Xumin and Wang, Shuo and Min, Cheng and Hu, Yu},
-  journal={arXiv preprint},
+  journal={arXiv preprint # comming soon},
   year={2025}
 }
 ```
