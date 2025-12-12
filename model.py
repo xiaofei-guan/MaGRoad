@@ -2,16 +2,13 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-# from torchvision.ops import nms
 import matplotlib.pyplot as plt
 import math
-import copy
 import os
 
 from functools import partial
 from torchmetrics.classification import BinaryJaccardIndex, F1Score, BinaryPrecisionRecallCurve
 
-# import lightning.pytorch as pl
 import pytorch_lightning as pl
 
 from sam.segment_anything.modeling.image_encoder import ImageEncoderViT
@@ -20,7 +17,6 @@ from sam.segment_anything.modeling.prompt_encoder import PromptEncoder
 from sam.segment_anything.modeling.transformer import TwoWayTransformer
 from sam.segment_anything.modeling.common import LayerNorm2d
 
-# import wandb # Use wandb to track machine learning work
 import pprint
 import torchvision
 import numpy as np
@@ -128,8 +124,8 @@ class TopoNet(nn.Module):
         pairs_valid = pairs_valid.view(batch_size * n_samples, n_pairs)
 
         # [B * N_samples, 1]
-        #### flips mask for all-invalid pairs to prevent NaN # 保证pairs_valid 中的每一行至少有一个 True 值，避免全无效行导致的计算问题。
-        all_invalid_pair_mask = torch.eq(torch.sum(pairs_valid, dim=-1), 0).unsqueeze(-1) # True表示该样本的所有配对都是无效的
+        #### flips mask for all-invalid pairs to prevent NaN
+        all_invalid_pair_mask = torch.eq(torch.sum(pairs_valid, dim=-1), 0).unsqueeze(-1) # True means all pairs are invalid for this sample
         pairs_valid = torch.logical_or(pairs_valid, all_invalid_pair_mask)
 
         padding_mask = ~pairs_valid
@@ -148,233 +144,6 @@ class TopoNet(nn.Module):
 
         scores = torch.sigmoid(logits)
 
-        return logits, scores
-
-
-class PathAwareFeatureExtractor(nn.Module):
-    def __init__(self, feature_dim=256, image_size=1024, num_samples=32):
-        super().__init__()
-        self.feature_dim = feature_dim
-        self.image_size = image_size
-        self.num_samples = num_samples
-        
-        # 路径采样网络
-        self.path_sampler = nn.Sequential(
-            nn.Conv2d(2, 32, 3, padding=1),  # 输入road+kp mask
-            nn.ReLU(),
-            nn.Conv2d(32, 64, 3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(64, 32, 3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(32, 1, 1),
-            nn.Sigmoid()  # 路径连通性概率
-        )
-        
-        # 路径特征编码器
-        self.path_encoder = nn.Sequential(
-            nn.Linear(self.num_samples, self.num_samples * 2),  # 路径采样点数量
-            nn.ReLU(),
-            nn.Linear(self.num_samples * 2, self.num_samples * 4),
-            nn.ReLU(),
-            nn.Linear(self.num_samples * 4, self.num_samples * 2)
-        )
-        
-        # BilinearSampler for path sampling
-        self.bilinear_sampler = BilinearSampler(image_size=image_size)
-    
-    def sample_paths_between_points_parallel(self, src_points, tgt_points, path_connectivity_map, num_samples=32):
-        """
-        并行采样所有点对之间的路径连通性
-        
-        Args:
-            src_points: [B, num_pairs, 2] - 源点坐标 (在原始1024分辨率下)
-            tgt_points: [B, num_pairs, 2] - 目标点坐标 (在原始1024分辨率下)
-            path_connectivity_map: [B, 1, H, W] - 路径连通性图
-            num_samples: int - 每条路径的采样点数量
-            
-        Returns:
-            path_connectivity: [B, num_pairs, num_samples] - 每条路径的连通性特征
-        """
-        batch_size, num_pairs, _ = src_points.shape
-        device = src_points.device
-        
-        # 生成采样参数 t: [num_samples]
-        t = torch.linspace(0, 1, num_samples, device=device)  # [num_samples]
-        
-        # 扩展维度用于广播: [1, 1, num_samples, 1]
-        t = t.view(1, 1, num_samples, 1)
-        
-        # 扩展点坐标维度: [B, num_pairs, 1, 2]
-        src_expanded = src_points.unsqueeze(2)  # [B, num_pairs, 1, 2]
-        tgt_expanded = tgt_points.unsqueeze(2)  # [B, num_pairs, 1, 2]
-        
-        # 并行生成所有路径的采样点: [B, num_pairs, num_samples, 2]
-        # path_points[b,p,s,:] = src[b,p,:] + t[s] * (tgt[b,p,:] - src[b,p,:])
-        path_points = src_expanded + t * (tgt_expanded - src_expanded)
-        
-        # 重塑为bilinear sampler需要的格式: [B, num_pairs * num_samples, 2]
-        path_points_flat = path_points.view(batch_size, num_pairs * num_samples, 2)
-
-        # 在路径连通性图上并行采样所有路径点: [B, num_pairs * num_samples, 1]
-        path_connectivity_flat = self.bilinear_sampler(
-            path_connectivity_map, path_points_flat
-        )  # [B, num_pairs * num_samples, 1]
-        
-        # 重塑回路径格式: [B, num_pairs, num_samples]
-        path_connectivity = path_connectivity_flat.squeeze(-1).view(
-            batch_size, num_pairs, num_samples
-        )
-        
-        return path_connectivity
-    
-    def forward(self, mask_logits, src_points, tgt_points):
-        """
-        前向传播
-        
-        Args:
-            mask_logits: [B, 2, H, W] - mask logits (road + keypoint)
-            src_points: [B, num_pairs, 2] - 源点坐标
-            tgt_points: [B, num_pairs, 2] - 目标点坐标
-            
-        Returns:
-            path_features: [B, num_pairs, 64] - 路径感知特征
-        """
-        # 1. 预测路径连通性图: [B, 2, H, W] -> [B, 1, H, W]
-        mask_probs = torch.sigmoid(mask_logits)  # [B, 2, H, W]
-        path_connectivity_map = self.path_sampler(mask_probs)  # [B, 1, H, W]
-        
-        # 2. 并行采样所有路径: [B, num_pairs, num_samples]
-        path_connectivity = self.sample_paths_between_points_parallel(
-            src_points, tgt_points, path_connectivity_map, num_samples=self.num_samples
-        )  # [B, num_pairs, 32]
-        
-        # 3. 编码路径特征: [B, num_pairs, 32] -> [B, num_pairs, 64]
-        batch_size, num_pairs, num_samples = path_connectivity.shape
-        
-        # 重塑为 [B * num_pairs, num_samples] 用于线性层
-        path_connectivity_flat = path_connectivity.view(batch_size * num_pairs, num_samples)
-        
-        # 通过路径编码器: [B * num_pairs, 32] -> [B * num_pairs, 64]
-        path_features_flat = self.path_encoder(path_connectivity_flat)
-        
-        # 重塑回原格式: [B, num_pairs, 64]
-        path_features = path_features_flat.view(batch_size, num_pairs, self.num_samples * 2)
-        
-        return path_features
-
-class PathAwareTopoNet(nn.Module):
-    def __init__(self, config, feature_dim):
-        super().__init__()
-        self.config = config
-
-        self.hidden_dim = 128
-        self.heads = 4
-        self.num_attn_layers = 3
-
-        self.path_feature_dim = config.NUM_INTERPOLATIONS * 2
-        
-        # 原有组件
-        self.feature_proj = nn.Linear(feature_dim, self.hidden_dim)
-        self.pair_proj = nn.Linear(2 * self.hidden_dim + 2 + self.path_feature_dim, self.hidden_dim)  # +64 for path features
-        
-        # 路径感知组件
-        self.path_extractor = PathAwareFeatureExtractor(feature_dim, config.PATCH_SIZE, config.NUM_INTERPOLATIONS)
-        
-        # Create Transformer Encoder Layer
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=self.hidden_dim,
-            nhead=self.heads,
-            dim_feedforward=self.hidden_dim,
-            dropout=0.1,
-            activation='relu',
-            batch_first=True  # Input format is [batch size, sequence length, features]
-        )
-        
-        # Stack the Transformer Encoder Layers
-        if self.config.TOPONET_VERSION != 'no_transformer':
-            self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=self.num_attn_layers)
-        
-        self.output_proj = nn.Linear(self.hidden_dim, 1)
-    
-    def forward(self, points, point_features, pairs, pairs_valid, mask_logits=None):
-        """
-        前向传播
-        
-        Args:
-            points: [B, N_points, 2] - 所有候选点坐标
-            point_features: [B, N_points, D] - 点特征
-            pairs: [B, N_samples, N_pairs, 2] - 点对索引
-            pairs_valid: [B, N_samples, N_pairs] - 有效性掩码
-            mask_logits: [B, 2, H, W] - mask logits
-            
-        Returns:
-            logits: [B, N_samples, N_pairs, 1] - 连接概率logits
-            scores: [B, N_samples, N_pairs, 1] - 连接概率scores
-        """
-        # 1. 提取基础点特征: [B, N_points, D] -> [B, N_points, hidden_dim]
-        point_features = F.relu(self.feature_proj(point_features))
-        
-        batch_size, n_samples, n_pairs, _ = pairs.shape
-        
-        # 2. 重塑pairs为平坦格式: [B, N_samples * N_pairs, 2]
-        pairs_flat = pairs.view(batch_size, -1, 2)  # [B, N_samples * N_pairs, 2]
-        
-        # 3. 创建batch索引用于高级索引: [B, N_samples * N_pairs]
-        batch_indices = torch.arange(batch_size, device=pairs.device).view(-1, 1).expand(-1, n_samples * n_pairs)
-        
-        # 4. 获取点对特征: [B, N_samples * N_pairs, hidden_dim]
-        src_features = point_features[batch_indices, pairs_flat[:, :, 0]]  # [B, N_samples * N_pairs, hidden_dim]
-        tgt_features = point_features[batch_indices, pairs_flat[:, :, 1]]  # [B, N_samples * N_pairs, hidden_dim]
-        
-        # 5. 获取点对坐标: [B, N_samples * N_pairs, 2]
-        src_points = points[batch_indices, pairs_flat[:, :, 0]]  # [B, N_samples * N_pairs, 2]
-        tgt_points = points[batch_indices, pairs_flat[:, :, 1]]  # [B, N_samples * N_pairs, 2]
-        offset = tgt_points - src_points  # [B, N_samples * N_pairs, 2]
-        offset = offset.float() # torch.int64 -> torch.float32
-
-        # dist = torch.norm(offset, dim=-1, keepdim=True) # [B, N_samples * N_pairs, 1]
-        
-        # 6. **关键创新：并行提取路径感知特征**
-        
-        # 并行提取路径特征: [B, N_samples * N_pairs, 64]
-        path_features = self.path_extractor(
-            mask_logits, src_points, tgt_points
-        )  # [B, N_samples * N_pairs, 64]
-                
-        # ablation study
-        # 7. 融合所有特征:
-        # [B, N_samples * N_pairs, 2D + 2 + path_feature_dim]
-        if self.config.TOPONET_VERSION == 'no_tgt_features':
-            fused_features = torch.concat([src_features, torch.zeros_like(tgt_features), offset, path_features], dim=2)
-        if self.config.TOPONET_VERSION == 'no_offset':
-            fused_features = torch.concat([src_features, tgt_features, torch.zeros_like(offset), path_features], dim=2)
-        if self.config.TOPONET_VERSION == 'no_features':
-            fused_features = torch.concat([torch.zeros_like(src_features), torch.zeros_like(tgt_features), offset, path_features], dim=2)
-            # fused_features = torch.concat([torch.zeros_like(src_features), torch.zeros_like(tgt_features), torch.zeros_like(dist), dist, path_features], dim=2)
-        else:
-            fused_features = torch.concat([src_features, tgt_features, offset, path_features], dim=2)
-
-        # 8. 投影到hidden_dim: [B, N_samples * N_pairs, hidden_dim]
-        pair_features = F.relu(self.pair_proj(fused_features))
-        
-        # 9. 重塑为序列格式用于attention: [B * N_samples, N_pairs, hidden_dim]
-        pair_features = pair_features.view(batch_size * n_samples, n_pairs, -1) # [B * N_samples, N_pairs, hidden_dim]
-        pairs_valid_flat = pairs_valid.view(batch_size * n_samples, n_pairs)
-        # flips mask for all-invalid pairs to prevent NaN
-        all_invalid_pair_mask = torch.eq(torch.sum(pairs_valid_flat, dim=-1), 0).unsqueeze(-1) # True表示该样本的所有配对都是无效的
-        pairs_valid_flat = torch.logical_or(pairs_valid_flat, all_invalid_pair_mask)
-        padding_mask = ~pairs_valid_flat  # [B * N_samples, N_pairs]
-        
-        # 10. 自注意力机制
-        pair_features = self.transformer_encoder(pair_features, src_key_padding_mask=padding_mask) # input shape [S, B, D]
-
-        # 11. 重塑回原始格式: [B, N_samples, N_pairs, hidden_dim]
-        pair_features = pair_features.view(batch_size, n_samples, n_pairs, -1)
-        
-        # 12. 输出连接预测: [B, N_samples, N_pairs, 1]
-        logits = self.output_proj(pair_features)
-        scores = torch.sigmoid(logits)
-        
         return logits, scores
 
 
@@ -420,11 +189,11 @@ def sample_line_points(src: torch.Tensor, dst: torch.Tensor, num_samples: int) -
 
 class GeodesicPathExtractor(nn.Module):
     """
-    轻量、可微的路径感知特征提取器：
-    - 从 mask_logits 的 road 概率图上，在直线段上等距采样
-    - 多尺度平滑（avg pooling）后重复采样
-    - 统计特征：mean / std / softmin（对(1-p)取softmin，近似最差路段）
-    返回 [B, E, F_path] 的向量（E 为边数 S*K）
+    Lightweight, differentiable path-aware feature extractor:
+    - Sample equidistant points on the line segments from the road probability map in mask_logits
+    - Sample multiple times after multi-scale smoothing (avg pooling)
+    - Statistical features: mean / std / softmin (softmin of (1-p), approximate worst road)
+    Return [B, E, F_path] vector (E is number of edges, S*K)
     """
     def __init__(self, image_size: int, num_samples: int = 32,
                  pool_kernel_sizes: Optional[List[int]] = None,
@@ -432,7 +201,7 @@ class GeodesicPathExtractor(nn.Module):
         super().__init__()
         self.image_size = image_size
         self.num_samples = num_samples
-        self.pool_kernel_sizes = pool_kernel_sizes or [1, 5, 11]  # 1=原图, 再两种平滑
+        self.pool_kernel_sizes = pool_kernel_sizes or [1, 5, 11]  # 1=original image, then two smoothing
         self.tau = tau_softmin
 
     def forward(self, mask_logits: torch.Tensor,
@@ -440,7 +209,7 @@ class GeodesicPathExtractor(nn.Module):
                 dst_points: torch.Tensor   # [B, E, 2]
                 ) -> torch.Tensor:
         """
-        mask_logits: [B, 2, H, W], road prob 在通道1
+        mask_logits: [B, 2, H, W], road probability in channel 1
         src_points/dst_points: [B, E, 2] in [0, image_size]
         return: [B, E, F_path]
         """
@@ -448,7 +217,7 @@ class GeodesicPathExtractor(nn.Module):
         assert H == self.image_size and W == self.image_size, "mask size mismatch"
         road_prob = torch.sigmoid(mask_logits[:, 1:2])  # [B,1,H,W]
 
-        # 准备采样点
+        # prepare sampling points
         pts = sample_line_points(src_points, dst_points, self.num_samples)  # [B, E, S, 2]
         pts_norm = normalize_grid(pts, self.image_size)  # [-1,1]
         grid = pts_norm.view(B, -1, 1, 2)  # [B, E*S, 1, 2]
@@ -461,11 +230,11 @@ class GeodesicPathExtractor(nn.Module):
                 pad = ksz // 2
                 smoothed = F.avg_pool2d(road_prob, kernel_size=ksz, stride=1, padding=pad)
 
-            # 采样：grid_sample 输入是 [B,C,H,W] 和 [B, N, 1, 2]
+            # sampling: grid_sample input is [B,C,H,W] and [B, N, 1, 2]
             sampled = F.grid_sample(smoothed, grid, mode='bilinear', align_corners=False)  # [B,1,E*S,1]
             sampled = sampled.view(B, -1, self.num_samples)  # [B, E, S]
 
-            # 统计
+            # statistics
             mean_v = sampled.mean(dim=-1, keepdim=True)                         # [B,E,1]
             std_v  = sampled.std(dim=-1, unbiased=False, keepdim=True)          # [B,E,1]
             softmin_v = softmin(1.0 - sampled, dim=-1, tau=self.tau).unsqueeze(-1)  # [B,E,1]
@@ -478,8 +247,8 @@ class GeodesicPathExtractor(nn.Module):
 
 class BiasedSelfAttentionLayer(nn.Module):
     """
-    自定义带“加性偏置”的多头自注意力层 + FFN
-    支持 batch-wise 的 [B, L, L] 形状偏置矩阵 bias
+    Customized multi-head self-attention layer with "additive bias" + FFN
+    Support batch-wise [B, L, L] shape bias matrix bias
     """
     def __init__(self, d_model: int, nhead: int, dim_ff: int, dropout: float = 0.1):
         super().__init__()
@@ -502,7 +271,7 @@ class BiasedSelfAttentionLayer(nn.Module):
         self.norm2 = nn.LayerNorm(d_model)
 
     def forward(self, x: torch.Tensor,
-                key_padding_mask: Optional[torch.Tensor] = None,  # [B,L], True 表示要mask掉的位置
+                key_padding_mask: Optional[torch.Tensor] = None,  # [B,L], True means to mask the position
                 bias: Optional[torch.Tensor] = None               # [B,L,L]
                 ) -> torch.Tensor:
         """
@@ -519,11 +288,11 @@ class BiasedSelfAttentionLayer(nn.Module):
         attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.dk)  # [B,h,L,L]
 
         if bias is not None:
-            # 扩展到各个头
+            # expand to each head
             attn_scores = attn_scores + bias.unsqueeze(1)  # [B,1,L,L] -> [B,h,L,L]
 
         if key_padding_mask is not None:
-            # mask 掉无效的 key：把它对应列置为 -inf
+            # mask invalid keys: set the corresponding column to -inf
             # key_padding_mask: [B, L], True=pad
             mask = key_padding_mask.unsqueeze(1).unsqueeze(2)  # [B,1,1,L]
             attn_scores = attn_scores.masked_fill(mask, float('-inf'))
@@ -549,38 +318,38 @@ def build_edge_bias(src_xy: torch.Tensor,
                     lambda_turn: float = 0.6,
                     lambda_compete: float = 0.2) -> torch.Tensor:
     """
-    在“同一源点的一组候选边”内构造边-边的注意力偏置矩阵：
-    - turn 兼容度：Δθ 越小越相容（高斯核）
-    - 竞争先验：非对角线统一施加负偏置，鼓励稀疏选择
-    src_xy/dst_xy: [B, L, 2]（这里的 B 实际是 B*S，L 是 N_pairs）
-    valid: [B, L]，True为有效
+    Construct edge-edge attention bias matrix within "a group of candidate edges from the same source point":
+    - turn compatibility: smaller Δθ is more compatible (Gaussian kernel)
+    - competitive prior: negative bias is applied to off-diagonal uniformly, encouraging sparse selection
+    src_xy/dst_xy: [B, L, 2] (B is actually B*S, L is N_pairs)
+    valid: [B, L], True means valid
     return: bias [B, L, L]
     """
     B, L, _ = src_xy.shape
     offset = dst_xy - src_xy  # [B,L,2]
     angle = torch.atan2(offset[..., 1], offset[..., 0])  # [B,L]
 
-    # pairwise Δθ，映射到 [-pi, pi]
+    # pairwise Δθ, mapped to [-pi, pi]
     theta_i = angle.unsqueeze(-1)           # [B,L,1]
     theta_j = angle.unsqueeze(-2)           # [B,1,L]
     delta = theta_i - theta_j               # [B,L,L]
     delta = (delta + math.pi) % (2 * math.pi) - math.pi
 
     k_turn = torch.exp(- (delta ** 2) / (2 * (angle_sigma ** 2)))  # [B,L,L]
-    bias_turn = lambda_turn * (k_turn - 0.5)                        # 居中
+    bias_turn = lambda_turn * (k_turn - 0.5)                        # centered
 
-    # 竞争先验：对 off-diagonal 施加 -lambda_compete
+    # competitive prior: negative bias is applied to off-diagonal uniformly, encouraging sparse selection
     eye = torch.eye(L, device=src_xy.device).unsqueeze(0)          # [1,L,L]
     off_diag = 1.0 - eye
     bias_comp = -lambda_compete * off_diag                          # [1,L,L] -> broadcast
 
     bias = bias_turn + bias_comp
 
-    # 对无效边，避免与任何人产生正向偏置：置 0（实际会由 key_padding_mask 屏蔽）
+    # for invalid edges, avoid positive bias with anyone: set to 0 (actually masked by key_padding_mask)
     v = valid.float()
     bias = bias * v.unsqueeze(-1) * v.unsqueeze(-2)
 
-    # 主对角设为0
+    # set main diagonal to 0
     bias = bias * off_diag + 0.0 * eye
     return bias  # [B,L,L]
 
@@ -588,11 +357,11 @@ def build_edge_bias(src_xy: torch.Tensor,
 class MaGTopoNet(nn.Module):
     """
     Mask-aware Geodesic Line-Graph Transformer
-    - 可选使用 point_features（图像特征）
-    - 使用几何编码（offset/dist/angle-Fourier）
-    - 使用路径特征（在 road prob 上沿直线多尺度采样统计）
-    - 在“每个 sample 的候选边集合”上做带偏置的自注意力
-    接口保持与 TopoNet 一致
+    - Optional use point_features (image features)
+    - Use geometric encoding (offset/dist/angle-Fourier)
+    - Use path features (sampling statistics along the line on road prob)
+    - Do self-attention with biased (multi-layer) on "each sample's candidate edge set"
+    Interface kept consistent with TopoNet
     """
     def __init__(self, config, feature_dim: int,
                  use_point_features: bool = True,
@@ -608,15 +377,15 @@ class MaGTopoNet(nn.Module):
         self.use_path_features = use_path_features
         self.use_edge_bias = use_edge_bias
 
-        # 节点特征投影
+        # node feature projection
         if self.use_point_features:
             self.node_proj = nn.Linear(feature_dim, self.hidden_dim)
 
-        # 几何特征编码：dx,dy + dist + angle fourier(8) -> H/2
+        # geometric feature encoding: dx,dy + dist + angle fourier(8) -> H/2
         geo_in_dim = 2 + 1 + 8
         self.geo_proj = nn.Linear(geo_in_dim, self.hidden_dim // 2)
 
-        # 路径特征
+        # path feature
         if self.use_path_features:
             # path_feat: 3 * len(scales)，默认=3*3=9
             self.path_extractor = GeodesicPathExtractor(
@@ -627,7 +396,7 @@ class MaGTopoNet(nn.Module):
             )
             self.path_proj = nn.Linear(9, self.hidden_dim // 2)
 
-        # 融合后投影到 H
+        # fused projection to H
         fused_in = 0
         if self.use_point_features:
             fused_in += self.hidden_dim * 2
@@ -637,7 +406,7 @@ class MaGTopoNet(nn.Module):
 
         self.edge_proj = nn.Linear(fused_in, self.hidden_dim)
 
-        # 带偏置的 Transformer 编码器
+        # Transformer encoder with biased
         self.layers = nn.ModuleList([
             BiasedSelfAttentionLayer(self.hidden_dim, self.heads, dim_ff=self.hidden_dim, dropout=0.10)
             for _ in range(self.num_layers)
@@ -654,12 +423,12 @@ class MaGTopoNet(nn.Module):
         B, S, K, _ = pairs.shape
         dev = points.device
 
-        # 1) 准备索引
+        # 1) prepare indices
         pairs_flat = pairs.view(B, -1, 2)  # [B, S*K, 2]
         BE = S * K
         batch_idx = torch.arange(B, device=dev).view(-1, 1).expand(-1, BE)  # [B, S*K]
 
-        # 2) 节点特征
+        # 2) node features
         if self.use_point_features:
             node = F.gelu(self.node_proj(point_features))  # [B, N, H]
             src_idx = pairs_flat[:, :, 0]  # [B,BE]
@@ -667,7 +436,7 @@ class MaGTopoNet(nn.Module):
             src_feat = node[batch_idx, src_idx]  # [B, BE, H]
             dst_feat = node[batch_idx, dst_idx]  # [B, BE, H]
 
-        # 3) 几何特征
+        # 3) geometric features
         src_xy = points[batch_idx, pairs_flat[:, :, 0]].float()  # [B,BE,2]
         dst_xy = points[batch_idx, pairs_flat[:, :, 1]].float()  # [B,BE,2]
         offset = dst_xy - src_xy  # [B,BE,2]
@@ -680,13 +449,13 @@ class MaGTopoNet(nn.Module):
         geo_in = torch.cat([offset_norm, dist_norm, angle_enc], dim=-1)
         geo_feat = F.gelu(self.geo_proj(geo_in))  # [B,BE,H/2]
 
-        # 4) 路径特征（来自 mask_logits 的可微采样）
+        # 4) path features (differentiable sampling from mask_logits)
         if self.use_path_features:
             assert mask_logits is not None, "mask_logits is required when use_path_features=True"
             path_feat_raw = self.path_extractor(mask_logits, src_xy, dst_xy)  # [B,BE,9]
             path_feat = F.gelu(self.path_proj(path_feat_raw))                 # [B,BE,H/2]
 
-        # 5) 边token融合
+        # 5) edge token fusion
         feats = [geo_feat]
         if self.use_point_features:
             feats = [src_feat, dst_feat] + feats
@@ -696,14 +465,14 @@ class MaGTopoNet(nn.Module):
         edge_tok = torch.cat(feats, dim=-1)     # [B,BE, fused_in]
         edge_tok = F.gelu(self.edge_proj(edge_tok))  # [B,BE,H]
 
-        # 6) 组内（每个 sample）编码：reshape 为 [B*S, K, H]
+        # 6) within-group (each sample) encoding: reshape to [B*S, K, H]
         x = edge_tok.view(B, S, K, -1).view(B * S, K, -1)        # [B*S, K, H]
         valid = pairs_valid.view(B * S, K)                       # [B*S, K]
-        # 至少保证每组有一个True，防止全无效导致NaN
+        # ensure at least one True in each group, prevent NaN due to all invalid
         all_invalid = (valid.sum(dim=-1, keepdim=True) == 0)
         valid = torch.logical_or(valid, all_invalid)
 
-        # 7) 构造偏置
+        # 7) construct bias
         if self.use_edge_bias:
             src_xy_g = src_xy.view(B, S, K, 2).view(B * S, K, 2)
             dst_xy_g = dst_xy.view(B, S, K, 2).view(B * S, K, 2)
@@ -714,12 +483,12 @@ class MaGTopoNet(nn.Module):
         else:
             bias = None
 
-        # 8) 带偏置的自注意力编码（多层）
+        # 8) self-attention encoder with biased (multi-layer)
         key_padding_mask = ~valid  # True=pad
         for layer in self.layers:
             x = layer(x, key_padding_mask=key_padding_mask, bias=bias)  # [B*S,K,H]
 
-        # 9) 输出
+        # 9) output
         x = x.view(B, S, K, -1)
         logits = self.out(x)                     # [B,S,K,1]
         scores = torch.sigmoid(logits)
@@ -764,7 +533,7 @@ class _LoRA_qkv(nn.Module):
 
 
 
-class SAMRoad(pl.LightningModule):
+class MaGRoad(pl.LightningModule):
     """This is the RelationFormer module that performs object detection"""
 
     def __init__(self, config):
@@ -869,8 +638,6 @@ class SAMRoad(pl.LightningModule):
         self.bilinear_sampler = BilinearSampler(image_size=self.image_size)
         if config.TOPONET == 'transformer': # default
             self.topo_net = TopoNet(config, encoder_output_dim)
-        elif config.TOPONET == 'pathAwareTopoNet': # new
-            self.topo_net = PathAwareTopoNet(config, encoder_output_dim)
         elif config.TOPONET == 'maGTopoNet': # new
             self.topo_net = MaGTopoNet(config, encoder_output_dim,
                                        use_point_features=config.USE_POINT_FEATURES,
@@ -1118,7 +885,7 @@ class SAMRoad(pl.LightningModule):
             print('nan index: B, Sample, Pair')
             print(nan_index)
             import pdb
-            pdb.set_trace() # 如果发现 NaN 值，进入调试模式
+            pdb.set_trace()
 
         #### DEBUG NAN
 
@@ -1298,8 +1065,8 @@ class SAMRoad(pl.LightningModule):
         mask_logits, mask_scores, topo_logits, topo_scores = self(rgb, graph_points, pairs, valid)
 
         topo_gt, topo_loss_mask = batch['connected'].to(torch.int32), valid.to(torch.float32)
-        # self.keypoint_pr_curve.update(mask_scores[..., 0], keypoint_mask.to(torch.int32))
-        # self.road_pr_curve.update(mask_scores[..., 1], road_mask.to(torch.int32))
+        self.keypoint_pr_curve.update(mask_scores[..., 0], keypoint_mask.to(torch.int32))
+        self.road_pr_curve.update(mask_scores[..., 1], road_mask.to(torch.int32))
 
         # Save predictions and GT to disk for offline threshold computation
         try:
@@ -1406,9 +1173,8 @@ class SAMRoad(pl.LightningModule):
                 pr_curve_metric.reset()
         
         print('======= Finding best thresholds ======')
-        # find_best_threshold(self.keypoint_pr_curve, 'keypoint')
-        # find_best_threshold(self.road_pr_curve, 'road')
-        print('======= Finding best thresholds (topo only; keypoint/road computed offline) ======')
+        find_best_threshold(self.keypoint_pr_curve, 'keypoint')
+        find_best_threshold(self.road_pr_curve, 'road')
         find_best_threshold(self.topo_pr_curve, 'topo')
 
 
@@ -1451,7 +1217,6 @@ class SAMRoad(pl.LightningModule):
             'lr': self.config.BASE_LR # 0.001
         }]
         param_dicts += topo_net_params
-        # 打印 sam encoder, map decoder, topo net 的参数数量
         for i, param_dict in enumerate(param_dicts):
             param_num = sum([int(p.numel()) for p in param_dict['params']])
             print(f'optim param dict {i} params num: {param_num}')

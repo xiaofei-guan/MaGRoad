@@ -13,7 +13,6 @@ output_dirs=(
 )
 
 # Base directory where the output directories are located
-#base_dir="/home/guanwenfei/ResearchWork/sam_road-main/save"
 base_dir="save"
 
 # Loop through each output_dir in the list

@@ -1,18 +1,10 @@
 from argparse import ArgumentParser
-import numpy as np
 import torch
-import torch.nn as nn
-from datamodule import SamRoadDataModule
+from datamodule import DataSetModule
 
 from utils import load_config
-from model import SAMRoad
+from model import MaGRoad
 
-import wandb
-
-# import lightning.pytorch as pl
-# from lightning.pytorch.callbacks import ModelCheckpoint
-# from pytorch_lightning.loggers import WandbLogger
-# from lightning.pytorch.callbacks import LearningRateMonitor
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.callbacks import LearningRateMonitor
@@ -44,13 +36,13 @@ if __name__ == "__main__":
     torch.backends.cudnn.enabled = True
     
 
-    net = SAMRoad(config)
-    dm = SamRoadDataModule(config, dev_run=False)
+    net = MaGRoad(config)
+    dm = DataSetModule(config, dev_run=False)
 
     checkpoint_callback = ModelCheckpoint(every_n_epochs=1, save_top_k=-1)
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
-    tb_logger = TensorBoardLogger("lightning_logs", name="wild_data_test")
+    tb_logger = TensorBoardLogger("lightning_logs", name="cityscale_test")
 
 
     trainer = pl.Trainer(
@@ -60,7 +52,7 @@ if __name__ == "__main__":
         callbacks=[checkpoint_callback, lr_monitor],
         # strategy='ddp_find_unused_parameters_true',
         precision=args.precision,
-        accelerator="gpu",          # 指定使用 GPU
+        accelerator="gpu",         
         devices=[0],
         logger=tb_logger,
         # profiler=profiler

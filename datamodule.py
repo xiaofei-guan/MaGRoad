@@ -16,7 +16,7 @@ def _limit_lib_threads(_):
         pass
 
 
-class SamRoadDataModule(pl.LightningDataModule):
+class DataSetModule(pl.LightningDataModule):
     def __init__(self, config, dev_run=False):
         super().__init__()
         self.config = config

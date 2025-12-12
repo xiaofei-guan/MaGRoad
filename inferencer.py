@@ -7,14 +7,13 @@ import cv2
 import re
 
 
-from utils import load_config, create_output_dir_and_save_config
+from utils import load_config
 from dataset import cityscale_data_partition, read_rgb_img, get_patch_info_one_img
-from dataset import spacenet_data_partition, globalscale_data_partition
-from model import SAMRoad
+from dataset import spacenet_data_partition
+from model import MaGRoad
 import graph_extraction
 import graph_utils
 import triage
-# from triage import visualize_image_and_graph, rasterize_graph
 import pickle
 import scipy
 import rtree
@@ -33,9 +32,9 @@ parser.add_argument(
     "--config", default=None, help="model config."
 )
 parser.add_argument(
-    "--output_dir", default=None, help="Name of the output dir, if not specified will use timestamp"
+    "--output_dir", default="./lightning_logs/city_scale_infer", help="Name of the output dir, if not specified will use timestamp"
 )
-parser.add_argument("--device", default="cuda", help="device to use for training")
+parser.add_argument("--device", default=0, type=int, help="device id to use for inference")
 args = parser.parse_args()
 
 
@@ -65,11 +64,8 @@ def get_batch_img_patches(img, batch_patch_info):
 def get_indices_from_image_folder(folder_path):
 
     all_files = os.listdir(folder_path)
-    # 正则表达式模式，用于匹配文件名中的数字部分
     pattern = re.compile(r'data(\d+)\.png')
-    # 存放num的列表
     nums = []
-    # 遍历所有文件名，查找匹配的文件名并提取num
     for file_name in all_files:
         match = pattern.match(file_name)
         if match:
@@ -235,7 +231,7 @@ def infer_one_img(net, img, config):
     
     
     ## Extract sample points from masks
-    graph_points = graph_extraction.extract_graph_points(fused_keypoint_mask, fused_road_mask, config)
+    graph_points = graph_extraction.extract_graph_points(fused_keypoint_mask, fused_road_mask, config, use_fast_nms=config.USE_FAST_NMS)
     if graph_points.shape[0] == 0:
         # return graph_points, np.zeros((0, 2), dtype=np.int32)
         print('no predicted graph points!')
@@ -360,13 +356,14 @@ if __name__ == "__main__":
     config = load_config(args.config)
     
     # Builds eval model    
-    device = torch.device("cuda:2") if torch.cuda.is_available() else torch.device("cpu")
+    device_id = args.device
+    device_str = f"cuda:{device_id}" if torch.cuda.is_available() else "cpu"
+    device = torch.device(device_str)
     args.device = device
-    # device = torch.device("cuda") if args.device == "cuda" else torch.device("cpu")
     # Good when model architecture/input shape are fixed.
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.enabled = True
-    net = SAMRoad(config)
+    net = MaGRoad(config)
 
     # load checkpoint
     checkpoint = torch.load(args.checkpoint, map_location="cpu")
@@ -383,21 +380,15 @@ if __name__ == "__main__":
         _, _, test_img_indices = spacenet_data_partition()
         rgb_pattern = './spacenet/RGB_1.0_meter/{}__rgb.png'
         gt_graph_pattern = './spacenet/RGB_1.0_meter/{}__gt_graph.p'
-    elif config.DATASET == 'globalscale':
-        _, _, test_img_indices, out_domain_img_indices = globalscale_data_partition()
-        rgb_pattern = './globalscale/train/region_{}_sat.png'
-        gt_graph_pattern = './globalscale/train/region_{}_graph_gt.pickle'
-    elif config.DATASET == 'dataset':
-        with open('./mydata/dataset/dataset_split.json', 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        test_img_indices = data.get("test", [])
-        rgb_pattern = './mydata/dataset/data_{}.png'
-    elif config.DATASET == 'wild_data':
 
-        test_img_indices = list(range(34))
-        rgb_pattern = '/data20t/guanwenfei/dataset/wild_data/test/data{}.jpg'
+    if args.output_dir:
+        output_dir = args.output_dir
+    else:
+        output_dir = f'./lightning_logs/city_scale_infer/magroad_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
+    
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
-    output_dir = f'/data20t/guanwenfei/inference/wild_data_infer/magtoponet_{datetime.now().strftime("%Y%m%d_%H%M%S")}'
     total_inference_seconds = 0.0
 
     for img_id in test_img_indices:

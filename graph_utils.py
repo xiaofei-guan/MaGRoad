@@ -94,8 +94,8 @@ def edge_list_to_adj_table(nodes, edges):
     return adj_table
 
     
-# 追踪一条线段上的所有 节点索引 列表，遇到crossover/intersection/dead end停止
-# 注意，该算法并没有考虑非孤立圈，如果存在非孤立圈，返回segment是一条首尾不相连的线段
+# track a segment and return a list of node indices, stop when encountering crossover/intersection/dead end
+# Note: this algorithm does not consider non-isolated loops, if there are non-isolated loops, the returned segment is a segment that is not connected at the beginning and end.
 def trace_segment(start_edge, adj_table):
     segment_nodes = [start_edge[0], start_edge[1]]
     visited_nodes = set(segment_nodes)
@@ -118,8 +118,8 @@ def unique_edge(src, dst):
     return (min(src, dst), max(src, dst))
 
 
-# 找到所有路段并且检测出isolating loops，对于非isolating loops，
-# 会得到两条start p，end p相同但长度不同的线段，因此可以把起始点相同的两条线段合并为一个非isolating loops。
+# find all segments and detect isolating loops, for non-isolating loops,
+# two segments with the same start and end points but different lengths will be obtained, so two segments with the same start and end points can be merged into a non-isolating loop.
 def find_segments_in_road_graph(adj_table):
     # adj_table: road graph represented as adj table of nodes, as produced
     # by edge_list_to_adj_table.
@@ -178,7 +178,7 @@ def normalize_segments(coords, segments):
     return normalized_segments
     
 
- # 该函数通过对每条线段进行重新采样，使得每条线段由相同数量的点构成
+ # This function resamples each polyline to have the same number of points.
 def get_resampled_polylines(coords, segments, num_points):
     # Uniformly resamples each polyline defined by segments to num_points.
     # coords: [N_node, 2] node coords.
@@ -295,8 +295,8 @@ def remove_isolate_nodes(nodes, edges):
     return remaining_nodes, new_edges
 
 
-# 函数通过使用DBSCAN聚类算法将距离接近的节点合并为一个聚类，
-# 计算每个聚类的中心坐标作为新的节点，然后根据新的节点更新边信息
+# This function merges nodes that are close to each other using the DBSCAN clustering algorithm,
+# calculates the center coordinates of each cluster as new nodes, and then updates the edge information based on the new nodes.
 def merge_nodes(nodes, edges, distance_threshold):
     clustering = DBSCAN(eps=distance_threshold, min_samples=1).fit(nodes)
     node_cluster_indices = clustering.labels_
@@ -322,8 +322,8 @@ def merge_nodes(nodes, edges, distance_threshold):
     return cluster_centers, list(unique_edges)
 
 
-# 函数通过检查每条边的附近节点，如果节点距离边小于给定阈值，
-# 则将边在该节点处拆分成两条新边(没有完全明白)
+# This function checks the nearby nodes of each edge, if the node distance is less than the given threshold,
+# the edge is split into two new edges at the node (not fully understood).
 def split_edges(nodes, edges, distance_threshold):
     points = [Point(x, y) for x, y in nodes]
     point_tree = STRtree(points)
@@ -510,7 +510,7 @@ def find_intersection(segment1, segment2):
     # Check for intersection
     intersection = line1.intersection(line2)
 
-    # 交点不是端点，为有效点，返回
+    # if the intersection point is not an endpoint, it is a valid point, return
     if not intersection.is_empty and intersection.geom_type == 'Point':
         if not (
             intersection.equals(Point(x1, y1)) or
@@ -524,8 +524,8 @@ def find_intersection(segment1, segment2):
     # or intersection is at endpoints
     return None
 
-# 通过构建 R-tree 索引来加速线段交叉点查找，
-# 然后遍历每条线段，找到所有线段的交叉点
+# build an R-tree index to accelerate the line intersection point lookup,
+# then traverse each line, find all intersection points.
 def find_crossover_points(graph):
     # takes igraph
     # y axis shall point upwards for rtree to work properly
@@ -556,8 +556,8 @@ def find_crossover_points(graph):
 
     return crossover_points
 
-# 将给定图形中的每条边细分成多段，使得每段的长度接近指定的分辨率。
-# 细分过程通过插入新点和生成新边来实现，最后构建并返回一个新的 igraph 图形对象
+# subdivide each edge in the given graph into multiple segments, so that the length of each segment is close to the specified resolution.
+# the subdivision process is implemented by inserting new points and generating new edges, and then a new igraph object is built and returned.
 def subdivide_graph(graph, resolution):
     # takes igraph
     new_points = [p for p in graph.vs['point']]
@@ -584,7 +584,7 @@ def subdivide_graph(graph, resolution):
     new_graph.vs['point'] = np.array(new_points)
     return new_graph
         
-def nms_points(points, scores, radius, return_indices=False):
+def nms_points_old(points, scores, radius, return_indices=False):
     # if score > 1.0, the point is forced to be kept regardless
     sorted_indices = np.argsort(scores)[::-1]
     sorted_points = points[sorted_indices, :]
@@ -605,49 +605,93 @@ def nms_points(points, scores, radius, return_indices=False):
     else:
         return sorted_points[kept]
 
-# def nms_points(points: np.ndarray, scores: np.ndarray, radius: float, return_indices: bool = False) -> Tuple[np.ndarray, np.ndarray]:
-#     """
-#     Efficient NMS implementation using KDTree for faster radius searches.
-    
-#     Args:
-#         points: Array of point coordinates (N, 2)
-#         scores: Array of point scores (N,)
-#         radius: Suppression radius
+def nms_points(points: np.ndarray, scores: np.ndarray, radius: float, return_indices: bool = False) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    An efficient NMS implementation uses a KD-Tree for faster radius searches, but it cannot forcefully preserve specific intersection points.
+       
+    Args:
+        points: Array of point coordinates (N, 2)
+        scores: Array of point scores (N,)
+        radius: Suppression radius
         
-#     Returns:
-#         selected_points: Points after NMS
-#         selected_scores: Scores of selected points
-#     """
+    Returns:
+        selected_points: Points after NMS
+        selected_scores: Scores of selected points
+    """
 
-#     # Sort points by score in descending order
-#     order = np.argsort(scores)[::-1]
-#     points = points[order]
-#     scores = scores[order]
+    # Sort points by score in descending order
+    order = np.argsort(scores)[::-1]
+    points = points[order]
+    scores = scores[order]
+
+    # Initialize KDTree for efficient radius search
+    kdtree = scipy.spatial.KDTree(points)
     
-#     # Initialize KDTree for efficient radius search
-#     kdtree = scipy.spatial.KDTree(points)
+    # Initialize mask for keeping track of suppressed points
+    keep_mask = np.ones(len(points), dtype=bool)
     
-#     # Initialize mask for keeping track of suppressed points
-#     keep_mask = np.ones(len(points), dtype=bool)
-    
-#     # Process points in order of decreasing score
-#     for i in range(len(points)):
-#         if keep_mask[i]:
-#             # Find neighbors within radius
-#             neighbors = kdtree.query_ball_point(points[i], radius)
+    # Process points in order of decreasing score
+    for i in range(len(points)):
+        if keep_mask[i]:
+            # Find neighbors within radius
+            neighbors = kdtree.query_ball_point(points[i], radius)
             
-#             # Suppress neighbors with lower scores
-#             for j in neighbors:
-#                 if j > i:  # Skip already processed points
-#                     keep_mask[j] = False
+            # Suppress neighbors with lower scores
+            for j in neighbors:
+                if j > i:
+                    keep_mask[j] = False
     
-#     # Keep only non-suppressed points
-#     selected_points = points[keep_mask]
-#     if return_indices:
-#         selected_indices = order[keep_mask]
-#         return selected_points, selected_indices
-#     else:
-#         return selected_points
+    # Keep only non-suppressed points
+    selected_points = points[keep_mask]
+    if return_indices:
+        selected_indices = order[keep_mask]
+        return selected_points, selected_indices
+    else:
+        return selected_points
+
+def nms_points_traning(points: np.ndarray, scores: np.ndarray, radius: float, return_indices: bool = False) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    An efficient NMS implementation uses a KD-Tree for faster radius searches, but it cannot forcefully preserve specific intersection points.
+       
+    Args:
+        points: Array of point coordinates (N, 2)
+        scores: Array of point scores (N,)
+        radius: Suppression radius
+        
+    Returns:
+        selected_points: Points after NMS
+        selected_scores: Scores of selected points
+    """
+
+    # Sort points by score in descending order
+    order = np.argsort(scores)[::-1]
+    points = points[order]
+    scores = scores[order]
+
+    # Initialize KDTree for efficient radius search
+    kdtree = scipy.spatial.KDTree(points)
+    
+    # Initialize mask for keeping track of suppressed points
+    keep_mask = np.ones(len(points), dtype=bool)
+    
+    # Process points in order of decreasing score
+    for i in range(len(points)):
+        if keep_mask[i]:
+            # Find neighbors within radius
+            neighbors = kdtree.query_ball_point(points[i], radius)
+            
+            # Suppress neighbors with lower scores
+            for j in neighbors:
+                if j > i and scores[j] < 2.0: # only suppress points with score < 2.0
+                    keep_mask[j] = False
+    
+    # Keep only non-suppressed points
+    selected_points = points[keep_mask]
+    if return_indices:
+        selected_indices = order[keep_mask]
+        return selected_points, selected_indices
+    else:
+        return selected_points
 
 def bfs_with_conditions(graph, start_node, stop_nodes, max_depth):
     """
