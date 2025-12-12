@@ -15,7 +15,7 @@ sam/ckpt/
 /code_backup
 globalscale/*
 wild_data/*
-compute_threshold/dump
+compute_threshold/
 config/my_config/
 
 wildroad/
