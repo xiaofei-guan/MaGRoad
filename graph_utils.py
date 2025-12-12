@@ -94,8 +94,8 @@ def edge_list_to_adj_table(nodes, edges):
     return adj_table
 
     
-# 追踪一条线段上的所有 节点索引 列表，遇到crossover/intersection/dead end停止
-# 注意，该算法并没有考虑非孤立圈，如果存在非孤立圈，返回segment是一条首尾不相连的线段
+# trace a segment and return a list of node indices, stop when encountering crossover/intersection/dead end
+# Note: this algorithm does not consider non-isolated loops, if there are non-isolated loops, the returned segment is a segment that is not connected at the beginning and end.
 def trace_segment(start_edge, adj_table):
     segment_nodes = [start_edge[0], start_edge[1]]
     visited_nodes = set(segment_nodes)
@@ -118,8 +118,8 @@ def unique_edge(src, dst):
     return (min(src, dst), max(src, dst))
 
 
-# 找到所有路段并且检测出isolating loops，对于非isolating loops，
-# 会得到两条start p，end p相同但长度不同的线段，因此可以把起始点相同的两条线段合并为一个非isolating loops。
+# find all segments and detect isolating loops, for non-isolating loops,
+# will get two segments with the same start and end points but different lengths, so two segments with the same start and end points can be merged into a non-isolating loop.
 def find_segments_in_road_graph(adj_table):
     # adj_table: road graph represented as adj table of nodes, as produced
     # by edge_list_to_adj_table.
@@ -178,7 +178,7 @@ def normalize_segments(coords, segments):
     return normalized_segments
     
 
- # 该函数通过对每条线段进行重新采样，使得每条线段由相同数量的点构成
+ # resample each polyline to the same number of points
 def get_resampled_polylines(coords, segments, num_points):
     # Uniformly resamples each polyline defined by segments to num_points.
     # coords: [N_node, 2] node coords.
@@ -295,8 +295,8 @@ def remove_isolate_nodes(nodes, edges):
     return remaining_nodes, new_edges
 
 
-# 函数通过使用DBSCAN聚类算法将距离接近的节点合并为一个聚类，
-# 计算每个聚类的中心坐标作为新的节点，然后根据新的节点更新边信息
+# merge nodes by DBSCAN clustering algorithm
+# calculate the center coordinates of each cluster as new nodes, then update the edges information according to the new nodes
 def merge_nodes(nodes, edges, distance_threshold):
     clustering = DBSCAN(eps=distance_threshold, min_samples=1).fit(nodes)
     node_cluster_indices = clustering.labels_
@@ -322,8 +322,8 @@ def merge_nodes(nodes, edges, distance_threshold):
     return cluster_centers, list(unique_edges)
 
 
-# 函数通过检查每条边的附近节点，如果节点距离边小于给定阈值，
-# 则将边在该节点处拆分成两条新边(没有完全明白)
+# split edges by checking the nearby nodes of each edge, if the node distance to the edge is less than the given threshold,
+# then split the edge at the node into two new edges(not fully understood)
 def split_edges(nodes, edges, distance_threshold):
     points = [Point(x, y) for x, y in nodes]
     point_tree = STRtree(points)
@@ -510,7 +510,7 @@ def find_intersection(segment1, segment2):
     # Check for intersection
     intersection = line1.intersection(line2)
 
-    # 交点不是端点，为有效点，返回
+    # if the intersection is not an endpoint, it is a valid point, return it
     if not intersection.is_empty and intersection.geom_type == 'Point':
         if not (
             intersection.equals(Point(x1, y1)) or
@@ -524,8 +524,8 @@ def find_intersection(segment1, segment2):
     # or intersection is at endpoints
     return None
 
-# 通过构建 R-tree 索引来加速线段交叉点查找，
-# 然后遍历每条线段，找到所有线段的交叉点
+# build R-tree to accelerate the search for segment intersection points,
+# then traverse each segment, find all segment intersection points
 def find_crossover_points(graph):
     # takes igraph
     # y axis shall point upwards for rtree to work properly
@@ -556,8 +556,8 @@ def find_crossover_points(graph):
 
     return crossover_points
 
-# 将给定图形中的每条边细分成多段，使得每段的长度接近指定的分辨率。
-# 细分过程通过插入新点和生成新边来实现，最后构建并返回一个新的 igraph 图形对象
+# subdivide each edge in the given graph into multiple segments, so that the length of each segment is close to the specified resolution.
+# the subdivision process is implemented by inserting new points and generating new edges, and finally a new igraph graph object is built and returned
 def subdivide_graph(graph, resolution):
     # takes igraph
     new_points = [p for p in graph.vs['point']]

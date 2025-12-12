@@ -111,7 +111,7 @@ The expected directory structures after preprocessing are shown below:
 
 > **Note for City-Scale and SpaceNet:**
 > The `main` branch is dedicated to **WildRoad** and **Global-Scale** experiments.
-> To reproduce results on **City-Scale** or **SpaceNet** (following the [`sam_road`](https://github.com/htcr/sam_road/tree/main) data preparation), please switch to the legacy branch:
+> To reproduce results on **City-Scale** or **SpaceNet** (following the [`sam_road`](https://github.com/htcr/sam_road) data preparation), please switch to the legacy branch:
 > ```bash
 > git checkout city-space
 > ```
@@ -176,7 +176,7 @@ If you find this work useful for your research, please cite our paper:
 
 We sincerely thank the authors of the following open-source projects for their contributions, which served as important foundations for our work:
 
-- [**Sam_Road**](https://github.com/congrui/sam_road)
+- [**Sam_Road**](https://github.com/htcr/sam_road)
 - [**Sam_Road++**](https://github.com/earth-insights/samroadplus)
 - [**Sat2Graph**](https://github.com/songtaohe/Sat2Graph)
 - [**Segment Anything Model**](https://github.com/facebookresearch/segment-anything)

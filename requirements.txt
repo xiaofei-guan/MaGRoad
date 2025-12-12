@@ -21,6 +21,7 @@ Shapely==1.8.5.post1
 spatial-correlation-sampler==0.4.0
 svgwrite==1.4.3
 tcod==16.2.2
+tensorboard==2.13.0
 torch==2.2.2
 torchaudio==2.2.2
 torchmetrics==1.4.0.post0

@@ -64,7 +64,7 @@ if __name__ == "__main__":
         # strategy='ddp_find_unused_parameters_true',
         precision=args.precision,
         accelerator="gpu",
-        devices=[3],
+        devices=[0],
         logger=tb_logger,
         # profiler=profiler
         )

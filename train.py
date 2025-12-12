@@ -58,6 +58,10 @@ if __name__ == "__main__":
 
     dm = DataSetModule(config, dev_run=dev_run)
 
+    every_n_epoch = 1
+    if config.DATASET=="globalscale":
+        every_n_epoch = 20 #
+
     checkpoint_callback = ModelCheckpoint(
         dirpath=f"lightning_logs/wild_road_training/ckpt/V_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
         filename="{epoch:02d}-{step:05d}-{val_loss:.4f}",
@@ -74,7 +78,7 @@ if __name__ == "__main__":
 
     trainer = pl.Trainer(
         max_epochs=config.TRAIN_EPOCHS,
-        check_val_every_n_epoch=1,
+        check_val_every_n_epoch=every_n_epoch,
         num_sanity_val_steps=2,
         callbacks=[checkpoint_callback, lr_monitor],
         logger=tb_logger,
@@ -86,7 +90,7 @@ if __name__ == "__main__":
         strategy='ddp_find_unused_parameters_true',
         # strategy='auto',
         accelerator="gpu",
-        devices=[3],
+        devices=[0],
         )
 
 

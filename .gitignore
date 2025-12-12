@@ -13,8 +13,10 @@ sam/segment_anything/__pycache__
 /logs
 /code_backup
 
-spacenet
+spacenet_ori
+cityscale_ori/
 cityscale
+spacenet
 cityscale_metrics
 spacenet_metrics
 
