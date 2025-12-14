@@ -9,7 +9,7 @@
 
 <div align="center">
 
-[**[ArXiv Paper]**](#) | [**[Interactive Tool]**](#) | [**[WildRoad Dataset]**](#)
+[**[ArXiv Paper]**](#) | [**[Interactive Tool]**](https://github.com/xiaofei-guan/MaGRoad-Prompt) | [**[WildRoad Dataset]**](#)
 
 </div>
 
@@ -57,7 +57,7 @@ MaGRoad demonstrates effective road extraction results across four diverse datas
 
 To address the bottleneck of creating large-scale vectorized datasets, we developed the **first interactive road extraction algorithm** and integrated it into a seamless **Web Application**. It transforms the workflow: instead of tedious manual plotting (e.g., QGIS), our model intelligently automates path connectivity based on sparse user clicks, drastically reducing annotation time.
 
-> 📢 **Open Source:** The full codebase for both the interactive algorithm and the annotation tool will be released to the community.
+> 📢 **Open Source:** The full codebase for both the interactive algorithm and the annotation tool has been released [here](https://github.com/xiaofei-guan/MaGRoad-Prompt).
 
 ---
 
@@ -167,13 +167,25 @@ Evaluation scores will be saved to your output directory
 
 💡 Tip: See eval_schedule.bash for detailed configuration and parameters.
 
+## 🎁 Model Zoo
+
+🎉 **Great News!** We have released the pre-trained checkpoints for all major datasets! You can now directly reproduce our results without training from scratch.
+
+| Dataset | Download Link |
+| :--- | :--- |
+| **WildRoad** | [Google Drive](https://drive.google.com/file/d/1Bf20K-meo3HQEmdYswSbOcbUDViErR7R/view?usp=sharing) |
+| **Global-Scale** | [Google Drive](https://drive.google.com/file/d/1JpeeNsT2l0v3yxF_5O_2IMg3ekhnFaxv/view?usp=sharing) |
+| **SpaceNet** | [Google Drive](https://drive.google.com/file/d/1FXcOQl8xmjc068RpuV7oSIOpRRexXcXs/view?usp=sharing) |
+
+Download the weights and place them in your checkpoint directory to get started!
+
 ## 📝 To-Do List
 
 - [x] Release automated extraction code (Training & Inference).
 - [x] Organize and clean up dataset preparation scripts.
 - [ ] Release **WildRoad** Dataset.
-- [ ] Release pre-trained model checkpoints.
-- [ ] Release Interactive Annotation Tool and GUI.
+- [x] Release pre-trained model checkpoints.
+- [x] Release Interactive Annotation Tool and GUI.
 
 ## 📍 Citation
 
