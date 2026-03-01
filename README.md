@@ -36,7 +36,7 @@
 
 - 🖱️Interactive Annotation: Lightweight tool for faster, low-effort annotation and refinement.
   
-- 🌍 WildRoad Dataset: A new benchmark for challenging scenarios (To be released).
+- 🌍 WildRoad Dataset: A new benchmark for challenging scenarios.
 
 ## 📊 Demo
 
@@ -88,7 +88,7 @@ mkdir -p sam/ckpt
 
 ### 📂 Data Preparation
 
-We support our new **WildRoad** benchmark (it's comming soon)  and the **[Global-Scale](https://pan.baidu.com/s/18HFMWV1VESFxZg25nCH4kw?pwd=fnku)** dataset. Please download the data and place it into the wildroad and globalscale folders, respectively.
+We support our new **[WildRoad](https://huggingface.co/datasets/guanxiaofei/WildRoad)** benchmark and the **[Global-Scale](https://pan.baidu.com/s/18HFMWV1VESFxZg25nCH4kw?pwd=fnku)** dataset. Please download the data and place it into the wildroad and globalscale folders, respectively.
 
 **WildRoad Dataset:**
 ```bash
@@ -169,7 +169,7 @@ Download the weights and place them in your checkpoint directory to get started!
 
 - [x] Release automated extraction code (Training & Inference).
 - [x] Organize and clean up dataset preparation scripts.
-- [ ] Release **WildRoad** Dataset.
+- [x] Release **WildRoad** Dataset.
 - [x] Release pre-trained model checkpoints.
 - [x] Release Interactive Annotation Tool and GUI.
 
